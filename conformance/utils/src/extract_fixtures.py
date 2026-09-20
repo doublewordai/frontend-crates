@@ -39,6 +39,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import fixture_disposition
+import dynamo_version
 import unified_history
 
 # The only errnos `Path.rename()` onto an existing directory is expected to
@@ -368,7 +369,12 @@ def materialize_shard(shard, source, dest_dir, verbose=False):
     if shard.get("format") == "unified-history":
         if verbose:
             print(f"  [materialize] {source.name} -> {dest_dir / 'unified'}", file=sys.stderr)
-        unified_history.materialize_store(source, dest_dir / "unified")
+        current_capture_id = f"dynamo_v2-{dynamo_version.dynamo_v2_label(ROOT)}"
+        unified_history.materialize_store(
+            source,
+            dest_dir / "unified",
+            current_capture_id=current_capture_id,
+        )
     else:
         extract_tarball(source, dest_dir, verbose=verbose)
 

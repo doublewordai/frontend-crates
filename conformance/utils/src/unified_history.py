@@ -1285,7 +1285,19 @@ def _materialized_record(case: dict, change: dict) -> tuple[dict, dict]:
     return record, change["document"]
 
 
-def materialize_store(root: Path, destination: Path, *, include_current_inputs: bool = True) -> None:
+def materialize_store(
+    root: Path,
+    destination: Path,
+    *,
+    include_current_inputs: bool = True,
+    current_capture_id: str | None = None,
+) -> None:
+    """Materialize inputs and captures, omitting retired cases from the current capture.
+
+    Historical captures retain retired cases so their old columns remain reproducible. The
+    selected current capture is different: its record set must match today's active inputs or
+    the live-capture guard treats historical aliases as extra current requests.
+    """
     store = load_store(root)
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
@@ -1360,6 +1372,8 @@ def materialize_store(root: Path, destination: Path, *, include_current_inputs: 
             state = history.resolve(capture_id)
             for case_id, change in sorted(state.items()):
                 case = history.family.cases[case_id]
+                if capture_id == current_capture_id and case["lifecycle"] != "active":
+                    continue
                 case_key = change["case_key"]
                 record, document_metadata = _materialized_record(case, change)
                 document_metadata = dict(document_metadata)
@@ -2116,6 +2130,12 @@ def _sync_current_corpus(
             for case_id, case in cases.items()
             if isinstance(case["scenario"], str)
         }
+        by_external_id = {
+            external_id: case_id
+            for case_id, case in cases.items()
+            for external_id in [case["display_id"], *case["historical_ids"]]
+            if isinstance(external_id, str)
+        }
         current_scenarios = set()
         scenario_owners = {}
         input_documents, golden_documents = family_documents[family_name]
@@ -2142,7 +2162,7 @@ def _sync_current_corpus(
                     )
                 scenario_owners[scenario] = f"{input_path}:{case_key}"
                 current_scenarios.add(scenario)
-                case_id = by_scenario.get(scenario)
+                case_id = by_scenario.get(scenario) or by_external_id.get(case_key)
                 if case_id is None:
                     case_id = _internal_case_id(case_key, scenario, set(cases))
                     cases[case_id] = {

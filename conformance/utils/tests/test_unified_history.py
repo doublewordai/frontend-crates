@@ -568,6 +568,23 @@ def test_writer_and_materializer_are_byte_deterministic(tmp_path):
     assert rendered["policy_tags"] == ["test-policy"]
 
 
+def test_materializer_filters_retired_cases_only_from_selected_current_capture(tmp_path):
+    source = _store(tmp_path / "source")
+    historical = tmp_path / "historical"
+    current = tmp_path / "current"
+
+    unified_history.materialize_store(source, historical)
+    unified_history.materialize_store(
+        source,
+        current,
+        current_capture_id="dynamo_v2-0.1.0",
+    )
+
+    retired = "dynamo_v2-0.1.0/gemma4/UNIFIED.31-40.yaml"
+    assert (historical / retired).is_file()
+    assert not (current / retired).exists()
+
+
 def test_materializer_is_deterministic_across_hash_seeds(tmp_path):
     source = _store(tmp_path / "source")
     materializer = "\n".join(
@@ -2217,6 +2234,32 @@ def test_sync_current_corpus_reactivates_retired_scenario(
     assert stored["text_only"]["lifecycle"] == "active"
     assert stored["text_only"]["display_id"] == restored_display_id
     assert stored["text_only"]["historical_ids"] == expected_aliases
+
+
+def test_sync_current_corpus_reactivates_retired_case_with_no_scenario(tmp_path):
+    root = _store(tmp_path / "store")
+    family_path = _family_path(root, "gemma4")
+    family = yaml.safe_load(family_path.read_text())
+    family["cases"]["text_only"].update(
+        {
+            "lifecycle": "retired",
+            "scenario": None,
+            "display_id": None,
+            "historical_ids": ["UNIFIED.1-1"],
+        }
+    )
+    family_path.write_text(unified_history.dump_yaml(family))
+    loose = tmp_path / "loose"
+    _write_loose_current(loose, "gemma4", [("UNIFIED.1-1", "text_only", "restored")])
+
+    unified_history.sync_current_corpus(root, loose)
+
+    stored = unified_history.load_store(root).families["gemma4"].cases
+    assert "text_only_2" not in stored
+    assert stored["text_only"]["lifecycle"] == "active"
+    assert stored["text_only"]["scenario"] == "text_only"
+    assert stored["text_only"]["display_id"] == "UNIFIED.1-1"
+    assert stored["text_only"]["historical_ids"] == []
 
 
 def test_complete_snapshot_rejects_omitted_family_without_mutation(tmp_path):
