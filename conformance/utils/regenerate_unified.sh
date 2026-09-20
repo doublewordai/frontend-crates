@@ -75,6 +75,14 @@ expected = {
     }
     for family in golden.FAMILIES
 }
+expected_red = {
+    family: {
+        key[len("UNIFIED."):].rsplit(".", 1)[0]
+        for key, case in golden.build_cases(family).items()
+        if case.get("expect", {}).get("dynamo_current", {}).get("verdict") == "diverge"
+    }
+    for family in golden.FAMILIES
+}
 
 current_label = f"dynamo_v2-{dynamo_v2_label(Path.cwd())}"
 store = load_store(root)
@@ -101,12 +109,29 @@ for family, case_ids in expected.items():
                 f"missing={missing} extra={extra}"
             )
 
+seen_reports = set()
 for report in current["reports"]:
-    if report.get("tab") == "tab-unified" and (report["empty"] or report["red"]):
+    if report.get("tab") != "tab-unified":
+        continue
+    family = report["model"]
+    seen_reports.add(family)
+    actual_red = {
+        issue["scenario"]
+        for issue in report.get("issues", [])
+        if issue.get("state") == "red"
+    }
+    if report["empty"] or actual_red != expected_red[family]:
         raise SystemExit(
-            f"Unified display is not clean for {report['model']}: "
-            f"empty={report['empty']} red={report['red']}"
+            f"Unified display differs from documented current-Dynamo expectations for {family}: "
+            f"empty={report['empty']} expected_red={sorted(expected_red[family])} "
+            f"actual_red={sorted(actual_red)}"
         )
+if seen_reports != set(golden.FAMILIES):
+    raise SystemExit(
+        f"Unified display families differ from the generator: "
+        f"missing={sorted(set(golden.FAMILIES) - seen_reports)} "
+        f"extra={sorted(seen_reports - set(golden.FAMILIES))}"
+    )
 
 print("Unified regeneration gate passed: generated YAML history and rendered JSON are current.")
 PY
