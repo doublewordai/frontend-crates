@@ -1,0 +1,39 @@
+schema_version: 2
+family: qwen3
+implementation: dynamo_v2
+parent: dynamo_v2-0.6.1+source.e8edaa1bc2b5dc4cafb1fa81af4164adcf8ddbf02f8a12e0fd82d8d617e59d81
+runtime_version: 0.6.1+source.5b2cf77232a10290c3ea607af887358afb0ab14e164619e3bc40c2d04a3b1cf9
+provenance:
+  status: captured
+  record:
+    crate_version: 0.6.1
+    git_commit: fd6dd4646faf6af95903efeac2bcaaea01c25209
+    git_head_tree: 04a3a6eb67938339f4bd31a0875e5b6506ee14cb
+    kind: unpublished
+    label: 0.6.1+source.5b2cf77232a10290c3ea607af887358afb0ab14e164619e3bc40c2d04a3b1cf9
+    release_commit: null
+    release_tag: null
+    source_id: sha256:5b2cf77232a10290c3ea607af887358afb0ab14e164619e3bc40c2d04a3b1cf9
+    source_paths:
+    - parsers/v1/src
+    - parsers/v1/Cargo.toml
+    - parsers/v1/build.rs
+    - parsers/v2/src
+    - parsers/v2/Cargo.toml
+    - parsers/v2/build.rs
+    - protocols/src
+    - protocols/Cargo.toml
+    - protocols/build.rs
+    - Cargo.toml
+    - Cargo.lock
+    - rust-toolchain
+    - rust-toolchain.toml
+    - .cargo
+    source_sha256: 5b2cf77232a10290c3ea607af887358afb0ab14e164619e3bc40c2d04a3b1cf9
+completeness: delta
+document:
+  mode: unified
+import_lineage: []
+changes: {}
+metadata_changes: {}
+document_overrides: {}
