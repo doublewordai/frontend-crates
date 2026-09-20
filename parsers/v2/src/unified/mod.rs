@@ -2239,25 +2239,6 @@ fn is_prefix_form(marker: &str) -> bool {
     marker.ends_with('=') || marker.ends_with("=\"")
 }
 
-/// Whether a native invoke's parameter element encloses the guided JSON value.
-///
-/// A direct native wrapper around `[ ... ]` is also valid guided framing: strip
-/// the wrapper and let the JSON cursor consume the value. A parameter element
-/// around that value is different. It is a complete native invoke, so the whole
-/// invoke is stray markup and must be consumed together. Recognising the
-/// parameter tag from its matching close keeps this rule shared across the XML
-/// families without teaching the guided scanner each family's tag spelling.
-fn native_parameter_wraps_payload(body: &str) -> bool {
-    let Some(payload_at) = body.find(['{', '[']) else {
-        return false;
-    };
-    let Some(name) = native_parameter_name(&body[..payload_at]) else {
-        return false;
-    };
-    let close = format!("</{name}>");
-    body[payload_at..].contains(&close)
-}
-
 /// Return the name of a native parameter tag before the guided JSON root.
 fn native_parameter_name(before_payload: &str) -> Option<&str> {
     let open_at = before_payload.rfind('<')?;
@@ -2311,8 +2292,7 @@ fn control_marker_len_at(
             // with a brace, and there the pair owns everything between its ends.
             // Both start with the same two bytes after the header, so the test has to
             // be on what follows the header, not on whether a brace exists at all.
-            && (!json_payload_started(&haystack[at + gt + 1..at + end])
-                || native_parameter_wraps_payload(&haystack[at + gt + 1..at + end]))
+            && !json_payload_started(&haystack[at + gt + 1..at + end])
         {
             return Some(end + invoke_end.len());
         }
