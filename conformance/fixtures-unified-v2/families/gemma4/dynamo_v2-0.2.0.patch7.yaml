@@ -1,0 +1,39 @@
+schema_version: 2
+family: gemma4
+implementation: dynamo_v2
+parent: dynamo_v2-0.1.27.patch7
+runtime_version: 0.2.0.patch7
+provenance:
+  status: captured
+  record:
+    crate_version: 0.2.0
+    git_commit: 97e22d0e861d156f51d33f1bb3514a86deda11ee
+    git_head_tree: 1ff0465d5d17d1a9eb991e476376198b89e9a939
+    kind: release
+    label: 0.2.0
+    release_commit: 97e22d0e861d156f51d33f1bb3514a86deda11ee
+    release_tag: dynamo-parsers-v2-v0.2.0
+    source_id: sha256:0e0cb99f61dc07559038e64823072ec3c76d6788eddb98e983a7e2feef679181
+    source_paths:
+    - parsers/v1/src
+    - parsers/v1/Cargo.toml
+    - parsers/v1/build.rs
+    - parsers/v2/src
+    - parsers/v2/Cargo.toml
+    - parsers/v2/build.rs
+    - protocols/src
+    - protocols/Cargo.toml
+    - protocols/build.rs
+    - Cargo.toml
+    - Cargo.lock
+    - rust-toolchain
+    - rust-toolchain.toml
+    - .cargo
+    source_sha256: 0e0cb99f61dc07559038e64823072ec3c76d6788eddb98e983a7e2feef679181
+completeness: delta
+document:
+  mode: unified
+import_lineage: []
+changes: {}
+metadata_changes: {}
+document_overrides: {}

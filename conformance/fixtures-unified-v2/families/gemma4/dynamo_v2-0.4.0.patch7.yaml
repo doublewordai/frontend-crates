@@ -1,0 +1,60 @@
+schema_version: 2
+family: gemma4
+implementation: dynamo_v2
+parent: dynamo_v2-0.3.4.patch7
+runtime_version: 0.4.0.patch7
+provenance:
+  status: captured
+  record:
+    crate_version: 0.4.0
+    git_commit: 1a2fe837b531e78fe7698a89f6e5dd10bf8f0ab5
+    git_head_tree: 601f9f75bfd96012b0c796beecb073eb5792c9cf
+    kind: release
+    label: 0.4.0
+    release_commit: 1a2fe837b531e78fe7698a89f6e5dd10bf8f0ab5
+    release_tag: dynamo-parsers-v2-v0.4.0
+    source_id: sha256:ee3b2f188eb638caad437e1ad26c5f769ef3b8cb2edde292c787b8cc394033f0
+    source_paths:
+    - parsers/v1/src
+    - parsers/v1/Cargo.toml
+    - parsers/v1/build.rs
+    - parsers/v2/src
+    - parsers/v2/Cargo.toml
+    - parsers/v2/build.rs
+    - protocols/src
+    - protocols/Cargo.toml
+    - protocols/build.rs
+    - Cargo.toml
+    - Cargo.lock
+    - rust-toolchain
+    - rust-toolchain.toml
+    - .cargo
+    source_sha256: ee3b2f188eb638caad437e1ad26c5f769ef3b8cb2edde292c787b8cc394033f0
+completeness: delta
+document:
+  mode: unified
+import_lineage: []
+changes:
+  guided_json_native_envelope_after_prose:
+    stimulus:
+      ref: current
+      semantic_sha256: a389b9b9396953511a42397a5228c0f8813b33ca1eb3af77f3e65c9a66b84b69
+    observation:
+      value:
+        assembled:
+        - kind: text
+          text: 'hello '
+        chunks:
+        - expected: []
+        - expected:
+          - kind: text
+            text: 'hello '
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+    case_key: UNIFIED.32-6
+metadata_changes: {}
+document_overrides: {}

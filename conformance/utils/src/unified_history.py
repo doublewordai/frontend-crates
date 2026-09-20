@@ -2056,6 +2056,20 @@ def _preserve_historical_stimulus(
             history._invalidate_resolution_cache()
 
 
+def _shared_corpus_roots(loose_root: Path, base: str) -> list[Path]:
+    """Return the released corpus root followed by PR overlays in numeric order."""
+    overlays = []
+    pattern = re.compile(rf"{re.escape(base)}\+pr(\d+)\.patch(\d+)")
+    for path in loose_root.iterdir():
+        if not path.is_dir():
+            continue
+        match = pattern.fullmatch(path.name)
+        if match is not None:
+            overlays.append((int(match.group(1)), int(match.group(2)), path))
+    overlays.sort(key=lambda row: (row[0], row[1]))
+    return [loose_root / base, *(path for _pr, _patch, path in overlays)]
+
+
 def _sync_current_corpus(
     store: Store,
     loose_root: Path,
@@ -2070,11 +2084,21 @@ def _sync_current_corpus(
         if complete_snapshot:
             raise ValueError("complete current snapshot needs inputs and golden roots")
         return documents
+    input_roots = _shared_corpus_roots(loose_root, "inputs")
+    golden_roots = _shared_corpus_roots(loose_root, "golden")
 
     family_documents = {}
     for family_name in sorted(store.families):
-        input_paths = sorted((inputs_root / family_name).glob("*.yaml"))
-        golden_paths = sorted((golden_root / family_name).glob("*.yaml"))
+        input_paths = [
+            path
+            for root in input_roots
+            for path in sorted((root / family_name).glob("*.yaml"))
+        ]
+        golden_paths = [
+            path
+            for root in golden_roots
+            for path in sorted((root / family_name).glob("*.yaml"))
+        ]
         if complete_snapshot and (not input_paths or not golden_paths):
             raise ValueError(f"complete current snapshot is missing family: {family_name}")
         input_documents = [
@@ -2102,7 +2126,7 @@ def _sync_current_corpus(
         family_documents[family_name] = (input_documents, golden_documents)
 
     known_families = set(store.families)
-    for root in (inputs_root, golden_root):
+    for root in (*input_roots, *golden_roots):
         unknown = sorted(
             path.name for path in root.iterdir() if path.is_dir() and path.name not in known_families
         )

@@ -1,0 +1,153 @@
+schema_version: 2
+family: kimi_k2
+implementation: dynamo_v2
+parent: dynamo_v2-0.3.2.patch7
+runtime_version: 0.3.3.patch7
+provenance:
+  status: captured
+  record:
+    crate_version: 0.3.3
+    git_commit: 27e98d4da34b364069759b2567823a37d3cfa4ac
+    git_head_tree: 397260f6478ba1e371eb047f8ee606459ef296b0
+    kind: release
+    label: 0.3.3
+    release_commit: 27e98d4da34b364069759b2567823a37d3cfa4ac
+    release_tag: dynamo-parsers-v2-v0.3.3
+    source_id: sha256:3be21ec29cf3130b7ecfa8d065bdb4b221ebcfaa0d6f650a519a3a1d2091b808
+    source_paths:
+    - parsers/v1/src
+    - parsers/v1/Cargo.toml
+    - parsers/v1/build.rs
+    - parsers/v2/src
+    - parsers/v2/Cargo.toml
+    - parsers/v2/build.rs
+    - protocols/src
+    - protocols/Cargo.toml
+    - protocols/build.rs
+    - Cargo.toml
+    - Cargo.lock
+    - rust-toolchain
+    - rust-toolchain.toml
+    - .cargo
+    source_sha256: 3be21ec29cf3130b7ecfa8d065bdb4b221ebcfaa0d6f650a519a3a1d2091b808
+completeness: delta
+document:
+  mode: unified
+import_lineage: []
+changes:
+  bare_parameterless_call:
+    stimulus:
+      inline:
+        input: <|tool_call_begin|>functions.get_time:0<|tool_call_argument_begin|>{}<|tool_call_end|><|tool_calls_section_end|>
+        init:
+          starting_state: None
+          tool_output_mode: Native
+          named_tool: null
+        finish_reason: stop
+        tools:
+        - name: get_weather
+          parameters:
+            type: object
+            properties:
+              city:
+                type: string
+        - name: f
+          parameters:
+            type: object
+            properties:
+              x:
+                type: string
+        - name: g
+          parameters:
+            type: object
+            properties:
+              y:
+                type: string
+        - name: run
+          parameters:
+            type: object
+            properties:
+              cmd:
+                type: string
+        - name: log
+          parameters:
+            type: object
+            properties:
+              note:
+                type: string
+        - name: sum_values
+          parameters:
+            type: object
+            properties:
+              values:
+                type: array
+                items:
+                  type: number
+        - name: functions.
+          parameters:
+            type: object
+            properties: {}
+        chunks:
+        - delta_text: <|tool_call_begin|>
+        - delta_text: functions.get_time:0
+        - delta_text: <|tool_call_argument_begin|>
+        - delta_text: '{}'
+        - delta_text: <|tool_call_end|>
+        - delta_text: <|tool_calls_section_end|>
+        - delta_text: ‹finish›
+      semantic_sha256: 0598e6b6a8fa3b336030a36f186b2bcfde7425c0d716e869a27cf1941034bb1d
+    observation:
+      value:
+        assembled:
+        - kind: tool_call
+          name: get_time
+          arguments: {}
+        chunks:
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: get_time
+            arguments: '{}'
+            terminal_metadata_unavailable: this build has no ToolCallDelta::complete
+        - expected: []
+    case_key: UNIFIED.6-2
+  bare_saved_closer:
+    stimulus:
+      ref: current
+      semantic_sha256: 1cdcf48b2126ed45a58cd5b5f1c446be98132334f928496cf3d65ce2e9ba5588
+    observation:
+      value:
+        assembled: []
+        chunks:
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+    case_key: UNIFIED.5-5
+  guided_json_native_envelope_after_prose:
+    stimulus:
+      ref: current
+      semantic_sha256: 4e25a3de9e26f3c962c809e3882903b6e4142d495dac4b6d63b783965e95c8c4
+    observation:
+      value:
+        assembled:
+        - kind: text
+          text: 'hello '
+        chunks:
+        - expected: []
+        - expected:
+          - kind: text
+            text: 'hello '
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+    case_key: UNIFIED.32-6
+metadata_changes: {}
+document_overrides: {}

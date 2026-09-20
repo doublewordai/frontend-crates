@@ -1,0 +1,39 @@
+schema_version: 2
+family: kimi_k2
+implementation: dynamo_v2
+parent: dynamo_v2-0.2.0.patch7
+runtime_version: 0.2.1.patch7
+provenance:
+  status: captured
+  record:
+    crate_version: 0.2.1
+    git_commit: 3d03ffc17aded9609682654e87caef6811ca011b
+    git_head_tree: 2083e05c6c19216be03e4b716157323e33e09d59
+    kind: release
+    label: 0.2.1
+    release_commit: 3d03ffc17aded9609682654e87caef6811ca011b
+    release_tag: dynamo-parsers-v2-v0.2.1
+    source_id: sha256:8c3e31b4dabf47dc981fc39b5415d392e0dbfda75ed26804797883b4363d7948
+    source_paths:
+    - parsers/v1/src
+    - parsers/v1/Cargo.toml
+    - parsers/v1/build.rs
+    - parsers/v2/src
+    - parsers/v2/Cargo.toml
+    - parsers/v2/build.rs
+    - protocols/src
+    - protocols/Cargo.toml
+    - protocols/build.rs
+    - Cargo.toml
+    - Cargo.lock
+    - rust-toolchain
+    - rust-toolchain.toml
+    - .cargo
+    source_sha256: 8c3e31b4dabf47dc981fc39b5415d392e0dbfda75ed26804797883b4363d7948
+completeness: delta
+document:
+  mode: unified
+import_lineage: []
+changes: {}
+metadata_changes: {}
+document_overrides: {}

@@ -1,0 +1,39 @@
+schema_version: 2
+family: deepseek_v4
+implementation: dynamo_v2
+parent: dynamo_v2-0.1.25.patch7
+runtime_version: 0.1.27.patch7
+provenance:
+  status: captured
+  record:
+    crate_version: 0.1.27
+    git_commit: 2336fd071f6ce46c9ded7387be321c9453439d9d
+    git_head_tree: 503180ca6b37dbf3acd636b89ddccc8a88afa144
+    kind: release
+    label: 0.1.27
+    release_commit: 2336fd071f6ce46c9ded7387be321c9453439d9d
+    release_tag: dynamo-parsers-v2-v0.1.27
+    source_id: sha256:118a4a9edaf76c6026d4234373f40d32cf8205cd7fefffe2046f9b3364b80ebd
+    source_paths:
+    - parsers/v1/src
+    - parsers/v1/Cargo.toml
+    - parsers/v1/build.rs
+    - parsers/v2/src
+    - parsers/v2/Cargo.toml
+    - parsers/v2/build.rs
+    - protocols/src
+    - protocols/Cargo.toml
+    - protocols/build.rs
+    - Cargo.toml
+    - Cargo.lock
+    - rust-toolchain
+    - rust-toolchain.toml
+    - .cargo
+    source_sha256: 118a4a9edaf76c6026d4234373f40d32cf8205cd7fefffe2046f9b3364b80ebd
+completeness: delta
+document:
+  mode: unified
+import_lineage: []
+changes: {}
+metadata_changes: {}
+document_overrides: {}

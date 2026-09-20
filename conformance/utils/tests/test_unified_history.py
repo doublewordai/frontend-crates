@@ -2087,6 +2087,34 @@ def test_sync_current_corpus_rejects_duplicate_scenario_owners(tmp_path):
     assert {path.relative_to(root): path.read_bytes() for path in root.rglob("*.yaml")} == before
 
 
+def test_sync_current_corpus_includes_pr_shared_overlays(tmp_path):
+    root = _store(tmp_path / "store")
+    loose = tmp_path / "loose"
+    _write_loose_current(
+        loose,
+        "gemma4",
+        [
+            ("UNIFIED.1-1", "text_only", "hello"),
+            ("UNIFIED.1-2", "pr_only", "overlay"),
+        ],
+    )
+    _write_loose_current(loose, "qwen3", [("UNIFIED.1-1", "text_only", "hi")])
+    for base in ("inputs", "golden"):
+        source = loose / base / "gemma4" / "UNIFIED.1-2.yaml"
+        destination = loose / f"{base}+pr234.patch1" / "gemma4" / source.name
+        destination.parent.mkdir(parents=True)
+        source.replace(destination)
+
+    unified_history.sync_current_corpus(root, loose, complete_snapshot=True)
+
+    stored = unified_history.load_store(root).families["gemma4"].cases
+    assert stored["pr_only"]["lifecycle"] == "active"
+    assert stored["pr_only"]["display_id"] == "UNIFIED.1-2"
+    materialized = tmp_path / "materialized"
+    unified_history.materialize_store(root, materialized)
+    assert (materialized / "inputs" / "gemma4" / "UNIFIED.1-2.yaml").is_file()
+
+
 def test_store_lock_serializes_real_and_symlinked_paths(tmp_path):
     real_store = _store(tmp_path / "real/store")
     alias_parent = tmp_path / "alias"

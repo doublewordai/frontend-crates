@@ -1,0 +1,48 @@
+schema_version: 2
+family: qwen3
+implementation: dynamo_v2
+parent: dynamo_v2-0.1.23.patch7
+runtime_version: 0.1.25.patch7
+provenance:
+  status: captured
+  record:
+    crate_version: 0.1.25
+    git_commit: 10e415620e2589698e2e74d4d2825c3bb0a5be1a
+    git_head_tree: 417664b90bb86432f4a0a2b9babe5320f47336ca
+    kind: release
+    label: 0.1.25
+    release_commit: 10e415620e2589698e2e74d4d2825c3bb0a5be1a
+    release_tag: dynamo-parsers-v2-v0.1.25
+    source_id: sha256:1ec156acd165b53a3b9f4fef0eb336f92c3379ca2f536a06265b4be79cf2240c
+    source_paths:
+    - parsers/v1/src
+    - parsers/v1/Cargo.toml
+    - parsers/v1/build.rs
+    - parsers/v2/src
+    - parsers/v2/Cargo.toml
+    - parsers/v2/build.rs
+    - protocols/src
+    - protocols/Cargo.toml
+    - protocols/build.rs
+    - Cargo.toml
+    - Cargo.lock
+    - rust-toolchain
+    - rust-toolchain.toml
+    - .cargo
+    source_sha256: 1ec156acd165b53a3b9f4fef0eb336f92c3379ca2f536a06265b4be79cf2240c
+completeness: delta
+document:
+  mode: unified
+import_lineage: []
+changes:
+  guided_json_native_envelope_after_prose:
+    stimulus:
+      ref: current
+      semantic_sha256: 92b3180535974559b7b9df976845a31d88f7e1f95196ea2bd9b012649f0b398f
+    observation:
+      unavailable:
+        code: legacy_unclassified
+        detail: this build has no request initialization API
+    case_key: UNIFIED.32-6
+metadata_changes: {}
+document_overrides: {}

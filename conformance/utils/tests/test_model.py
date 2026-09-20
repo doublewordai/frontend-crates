@@ -589,18 +589,21 @@ def test_v2_patch_overlay_folds_into_base_version(model_v2):
 def test_v2_dynamo_versions_come_from_fixtures(model_v2):
     # memory/chart_invariants: Dynamo version labels come from fixture provenance, never
     # live Cargo.toml. Every shown Dynamo version must be a captured fixture dir version.
+    def release_version(version: str) -> str:
+        return version.split("+source.", 1)[0].split(".patch", 1)[0]
+
     fixture_dynamo = set()
     for tree in ("toolcalling/fixtures-batch-v1", "toolcalling/fixtures-stream-v2"):
         for impl, vers in _peer_versions(tree).items():
             if impl.startswith("dynamo"):
-                fixture_dynamo |= {v.split(".patch")[0] for v in vers}
+                fixture_dynamo |= {release_version(v) for v in vers}
     shown = set()
     for t in model_v2["tabs"]:
         if t["kind"] != "toolcalling":
             continue
         for c in t["candidates"]:
             if c["impl"] == "dynamo" and c.get("version"):
-                shown.add(c["version"].split(".patch")[0])
+                shown.add(release_version(c["version"]))
     assert shown, "no dynamo versions shown"
     assert shown <= fixture_dynamo, f"dynamo versions not from fixtures: {shown - fixture_dynamo}"
 
@@ -725,20 +728,28 @@ def test_v2_parser_ni_matches_stream_v2_families(model_v2):
 
 
 def test_v2_stream_parser_only_covers_implemented_families(model_v2):
-    # The v2 stream candidate is n/a (uncovered) on more families than it covers — a
-    # structural coverage guard (was regex over data-cmp na counts).
+    # The registry owns which families Dynamo v2 implements. Keep the rendered model
+    # aligned with that declaration instead of relying on a corpus-wide n/a ratio,
+    # which changes whenever a supported family or case is added.
     tab = _tab(model_v2, "tab-toolcalling-streamv2")
     v2 = next(c["key"] for c in tab["candidates"] if c["key"].startswith("dynamo_v2"))
-    na = present = 0
-    for cell in _iter_cells(tab):
-        entry = (cell.get("cmp") or {}).get(v2)
-        if entry is None:
+    registry = yaml.safe_load((UTILS / "src/parser_families.yaml").read_text())["families"]
+    for row in tab["rows"]:
+        family = row.get("family")
+        if not family:
             continue
-        if entry["na"]:
-            na += 1
-        else:
-            present += 1
-    assert na >= present, f"v2 stream covers too much: na={na} present={present}"
+        assert family in registry, f"rendered family {family!r} is absent from the registry"
+        entries = [
+            (cell.get("cmp") or {}).get(v2)
+            for cell in row.get("cells", {}).values()
+            if cell.get("kind") == "cell"
+        ]
+        present = any(entry is not None and not entry["na"] for entry in entries)
+        implemented = registry[family].get("dynamo_v2") is not None
+        assert present == implemented, (
+            f"family {family!r}: rendered Dynamo v2 coverage={present}, "
+            f"registry implementation={registry[family].get('dynamo_v2')!r}"
+        )
 
 
 # ---- reasoning tabs -----------------------------------------------------------

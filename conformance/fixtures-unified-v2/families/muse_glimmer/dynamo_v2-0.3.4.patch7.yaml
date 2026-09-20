@@ -1,0 +1,39 @@
+schema_version: 2
+family: muse_glimmer
+implementation: dynamo_v2
+parent: dynamo_v2-0.3.4+source.c92eee42f5a83e6ba17a88c0a3648515731c690820caabe69d1e3ec6d3a87148.patch1
+runtime_version: 0.3.4.patch7
+provenance:
+  status: captured
+  record:
+    crate_version: 0.3.4
+    git_commit: b1cf29488447a182860e93f1990458c2fe48e939
+    git_head_tree: e94a03a8c33a9f7285f1fe413eae4be20e845d12
+    kind: release
+    label: 0.3.4
+    release_commit: b1cf29488447a182860e93f1990458c2fe48e939
+    release_tag: dynamo-parsers-v2-v0.3.4
+    source_id: sha256:81da1ace97711d5416615f0ac1c2c1ff3a7dcc2a32cc421fdbf53d0d30298599
+    source_paths:
+    - parsers/v1/src
+    - parsers/v1/Cargo.toml
+    - parsers/v1/build.rs
+    - parsers/v2/src
+    - parsers/v2/Cargo.toml
+    - parsers/v2/build.rs
+    - protocols/src
+    - protocols/Cargo.toml
+    - protocols/build.rs
+    - Cargo.toml
+    - Cargo.lock
+    - rust-toolchain
+    - rust-toolchain.toml
+    - .cargo
+    source_sha256: 81da1ace97711d5416615f0ac1c2c1ff3a7dcc2a32cc421fdbf53d0d30298599
+completeness: delta
+document:
+  mode: unified
+import_lineage: []
+changes: {}
+metadata_changes: {}
+document_overrides: {}

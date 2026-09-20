@@ -1,0 +1,203 @@
+schema_version: 2
+family: muse_glimmer
+implementation: dynamo_v2
+parent: dynamo_v2-0.2.1.patch7
+runtime_version: 0.3.1.patch7
+provenance:
+  status: captured
+  record:
+    crate_version: 0.3.1
+    git_commit: 453ce91dbaa0ea644e3fbd012c6b722b3158a0c0
+    git_head_tree: 8cd7b8de384b92c0e14317d0ae955ebb8f7510a5
+    kind: release
+    label: 0.3.1
+    release_commit: 453ce91dbaa0ea644e3fbd012c6b722b3158a0c0
+    release_tag: dynamo-parsers-v2-v0.3.1
+    source_id: sha256:978e7c90720f30fd564c9970d84f921b5824af2929e1236e0786c1d7a04756e5
+    source_paths:
+    - parsers/v1/src
+    - parsers/v1/Cargo.toml
+    - parsers/v1/build.rs
+    - parsers/v2/src
+    - parsers/v2/Cargo.toml
+    - parsers/v2/build.rs
+    - protocols/src
+    - protocols/Cargo.toml
+    - protocols/build.rs
+    - Cargo.toml
+    - Cargo.lock
+    - rust-toolchain
+    - rust-toolchain.toml
+    - .cargo
+    source_sha256: 978e7c90720f30fd564c9970d84f921b5824af2929e1236e0786c1d7a04756e5
+completeness: delta
+document:
+  mode: unified
+import_lineage: []
+changes:
+  bare_parameterless_call:
+    stimulus:
+      inline:
+        input: '<atem:invoke name="get_time">
+
+          </atem:invoke>
+
+          </atem:function_calls><|eom|>'
+        init:
+          starting_state: None
+          tool_output_mode: Native
+          named_tool: null
+        finish_reason: stop
+        tools:
+        - name: get_weather
+          parameters:
+            type: object
+            properties:
+              city:
+                type: string
+        - name: f
+          parameters:
+            type: object
+            properties:
+              x:
+                type: string
+        - name: g
+          parameters:
+            type: object
+            properties:
+              y:
+                type: string
+        - name: run
+          parameters:
+            type: object
+            properties:
+              cmd:
+                type: string
+        - name: log
+          parameters:
+            type: object
+            properties:
+              note:
+                type: string
+        - name: sum_values
+          parameters:
+            type: object
+            properties:
+              values:
+                type: array
+                items:
+                  type: number
+        - name: functions.
+          parameters:
+            type: object
+            properties: {}
+        chunks:
+        - delta_text: <atem:invoke name="get_time">
+        - delta_text: '
+
+            '
+        - delta_text: </atem:invoke>
+        - delta_text: '
+
+            '
+        - delta_text: </atem:function_calls>
+        - delta_text: <|eom|>
+        - delta_text: ‹finish›
+      semantic_sha256: 0efd472738f8c46c169eac7a4e8b3ca794b7e386bf07512fee6e136f01482578
+    observation:
+      value:
+        assembled:
+        - kind: text
+          text: '<atem:invoke name="get_time">
+
+            </atem:invoke>
+
+            </atem:function_calls>'
+        chunks:
+        - expected:
+          - kind: text
+            text: <atem:invoke name="get_time">
+        - expected:
+          - kind: text
+            text: '
+
+              '
+        - expected:
+          - kind: text
+            text: </atem:invoke>
+        - expected:
+          - kind: text
+            text: '
+
+              '
+        - expected:
+          - kind: text
+            text: </atem:function_calls>
+        - expected: []
+    case_key: UNIFIED.6-2
+  bare_saved_closer:
+    stimulus:
+      ref: current
+      semantic_sha256: 12a1830216966a74331a6ad3f3e60e485d3132f7ea97361fec7919ffe7d05eb4
+    observation:
+      value:
+        assembled:
+        - kind: text
+          text: '<atem:invoke name="run">
+
+            <atem:parameter name="cmd">first'
+        chunks:
+        - expected:
+          - kind: text
+            text: <atem:invoke name="run">
+        - expected:
+          - kind: text
+            text: '
+
+              '
+        - expected:
+          - kind: text
+            text: <atem:parameter name="cmd">
+        - expected:
+          - kind: text
+            text: firs
+        - expected:
+          - kind: text
+            text: t
+    case_key: UNIFIED.5-5
+  guided_json_native_envelope_after_prose:
+    stimulus:
+      ref: current
+      semantic_sha256: df58496b3c5ffaac99f1440b4ac903535731a8535a088273dfe184124b9a9f65
+    observation:
+      unavailable:
+        code: legacy_unclassified
+        detail: 'request initialization rejected: muse_glimmer has no reasoning marker pair, so the guided-JSON path has no                  reasoning spec to build on; use native tool output'
+    case_key: UNIFIED.32-6
+  wrapped_saved_closer_partial_marker:
+    stimulus:
+      ref: current
+      semantic_sha256: 3a9e8cf7923beb0b3b9e8c3c7ae91cf09e533eb37ab2e30e1147a972548798b6
+    observation:
+      value:
+        assembled:
+        - kind: text
+          text: <
+        chunks:
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected:
+          - kind: text
+            text: <
+    case_key: UNIFIED.5-4
+metadata_changes: {}
+document_overrides: {}

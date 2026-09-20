@@ -1,0 +1,205 @@
+schema_version: 2
+family: kimi_k3
+implementation: dynamo_v2
+parent: dynamo_v2-0.5.3.patch7
+runtime_version: 0.6.0.patch7
+provenance:
+  status: captured
+  record:
+    crate_version: 0.6.0
+    git_commit: c03e9af4c55ecca4852950239537b875d56e0cb1
+    git_head_tree: 6faaa60ff82e722e8ba5a72720f673fc51de94b9
+    kind: release
+    label: 0.6.0
+    release_commit: c03e9af4c55ecca4852950239537b875d56e0cb1
+    release_tag: dynamo-parsers-v2-v0.6.0
+    source_id: sha256:fac750820bbe3fe5eda494ca153d42516aab6a5fadd4bbe70a41871b717f5bc4
+    source_paths:
+    - parsers/v1/src
+    - parsers/v1/Cargo.toml
+    - parsers/v1/build.rs
+    - parsers/v2/src
+    - parsers/v2/Cargo.toml
+    - parsers/v2/build.rs
+    - protocols/src
+    - protocols/Cargo.toml
+    - protocols/build.rs
+    - Cargo.toml
+    - Cargo.lock
+    - rust-toolchain
+    - rust-toolchain.toml
+    - .cargo
+    source_sha256: fac750820bbe3fe5eda494ca153d42516aab6a5fadd4bbe70a41871b717f5bc4
+completeness: delta
+document:
+  mode: unified
+import_lineage: []
+changes:
+  bare_parameterless_call:
+    stimulus:
+      inline:
+        input: <|open|>call tool="get_time" index="1"<|sep|><|close|>call<|sep|><|close|>tools<|sep|>
+        init:
+          starting_state: None
+          tool_output_mode: Native
+          named_tool: null
+        finish_reason: stop
+        tools:
+        - name: get_weather
+          parameters:
+            type: object
+            properties:
+              city:
+                type: string
+        - name: f
+          parameters:
+            type: object
+            properties:
+              x:
+                type: string
+        - name: g
+          parameters:
+            type: object
+            properties:
+              y:
+                type: string
+        - name: run
+          parameters:
+            type: object
+            properties:
+              cmd:
+                type: string
+        - name: log
+          parameters:
+            type: object
+            properties:
+              note:
+                type: string
+        - name: sum_values
+          parameters:
+            type: object
+            properties:
+              values:
+                type: array
+                items:
+                  type: number
+        - name: functions.
+          parameters:
+            type: object
+            properties: {}
+        chunks:
+        - delta_text: <|open|>
+        - delta_text: call tool="get_time" index="1"
+        - delta_text: <|sep|>
+        - delta_text: <|close|>
+        - delta_text: call
+        - delta_text: <|sep|>
+        - delta_text: <|close|>
+        - delta_text: tools
+        - delta_text: <|sep|>
+        - delta_text: ‹finish›
+      semantic_sha256: 167c576396dfb4f6b1b626d4256cc7849a6e447da88a210271e24b2376b0e76b
+    case_key: UNIFIED.6-2
+    observation:
+      value:
+        assembled:
+        - kind: tool_call
+          name: get_time
+          arguments: {}
+        chunks:
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: get_time
+            arguments: '{}'
+            complete: true
+  bare_saved_closer:
+    stimulus:
+      ref: current
+      semantic_sha256: 043cc934fc28dcc268e8ce556b3fb9edfa16591ddebfb94c5e423d915ce6769e
+    case_key: UNIFIED.5-5
+    observation:
+      value:
+        assembled: []
+        chunks:
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+  guided_json_native_envelope_after_prose:
+    stimulus:
+      ref: current
+      semantic_sha256: 80b3eaa2f91781e716318440a8bb6630c6ba0f2b447946c8abdf937dcfffb9f3
+    case_key: UNIFIED.32-6
+    observation:
+      value:
+        assembled:
+        - kind: text
+          text: 'hello '
+        chunks:
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected:
+          - kind: text
+            text: 'hello '
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+  wrapped_saved_closer_partial_marker:
+    stimulus:
+      ref: current
+      semantic_sha256: 506e0df0a1019b977c28dc6da2245dd5afdb0df48f52a86542da6c716c32802c
+    case_key: UNIFIED.5-4
+    observation:
+      value:
+        assembled: []
+        chunks:
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+metadata_changes: {}
+document_overrides: {}

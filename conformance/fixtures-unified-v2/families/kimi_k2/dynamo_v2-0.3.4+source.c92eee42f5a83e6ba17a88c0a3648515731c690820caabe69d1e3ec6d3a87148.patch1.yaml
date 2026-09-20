@@ -1,0 +1,39 @@
+schema_version: 2
+family: kimi_k2
+implementation: dynamo_v2
+parent: dynamo_v2-0.3.4+source.b63eedbaaa0d3b47183a6d12b3fc4cfd6754f1725abb11a3a3129559b2ec833f.patch1
+runtime_version: 0.3.4+source.c92eee42f5a83e6ba17a88c0a3648515731c690820caabe69d1e3ec6d3a87148.patch1
+provenance:
+  status: captured
+  record:
+    crate_version: 0.3.4
+    git_commit: a8f4bf77f4966087af57f54d4dd3eff19ea26ec1
+    git_head_tree: 8c37275d32e43350d25ce2e1b61af4aef6738838
+    kind: unpublished
+    label: 0.3.4+source.c92eee42f5a83e6ba17a88c0a3648515731c690820caabe69d1e3ec6d3a87148
+    release_commit: null
+    release_tag: null
+    source_id: sha256:c92eee42f5a83e6ba17a88c0a3648515731c690820caabe69d1e3ec6d3a87148
+    source_paths:
+    - parsers/v1/src
+    - parsers/v1/Cargo.toml
+    - parsers/v1/build.rs
+    - parsers/v2/src
+    - parsers/v2/Cargo.toml
+    - parsers/v2/build.rs
+    - protocols/src
+    - protocols/Cargo.toml
+    - protocols/build.rs
+    - Cargo.toml
+    - Cargo.lock
+    - rust-toolchain
+    - rust-toolchain.toml
+    - .cargo
+    source_sha256: c92eee42f5a83e6ba17a88c0a3648515731c690820caabe69d1e3ec6d3a87148
+completeness: delta
+document:
+  mode: unified
+import_lineage: []
+changes: {}
+metadata_changes: {}
+document_overrides: {}

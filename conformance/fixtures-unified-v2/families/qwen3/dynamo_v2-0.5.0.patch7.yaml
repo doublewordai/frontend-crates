@@ -1,0 +1,171 @@
+schema_version: 2
+family: qwen3
+implementation: dynamo_v2
+parent: dynamo_v2-0.4.1.patch7
+runtime_version: 0.5.0.patch7
+provenance:
+  status: captured
+  record:
+    crate_version: 0.5.0
+    git_commit: 3c6e57342c897336c7e95764504cc693e77c1d5b
+    git_head_tree: b65ee60137f29a4c0242eb38f50da7f988ade25e
+    kind: release
+    label: 0.5.0
+    release_commit: 3c6e57342c897336c7e95764504cc693e77c1d5b
+    release_tag: dynamo-parsers-v2-v0.5.0
+    source_id: sha256:f983f5cae9ab75f09cc1bc042611b5b28923a08ebf1ff2c6026df56d02064eaf
+    source_paths:
+    - parsers/v1/src
+    - parsers/v1/Cargo.toml
+    - parsers/v1/build.rs
+    - parsers/v2/src
+    - parsers/v2/Cargo.toml
+    - parsers/v2/build.rs
+    - protocols/src
+    - protocols/Cargo.toml
+    - protocols/build.rs
+    - Cargo.toml
+    - Cargo.lock
+    - rust-toolchain
+    - rust-toolchain.toml
+    - .cargo
+    source_sha256: f983f5cae9ab75f09cc1bc042611b5b28923a08ebf1ff2c6026df56d02064eaf
+completeness: delta
+document:
+  mode: unified
+import_lineage: []
+changes:
+  bare_parameterless_call:
+    stimulus:
+      inline:
+        input: '<function=get_time>
+
+          </function>
+
+          </tool_call>'
+        init:
+          starting_state: None
+          tool_output_mode: Native
+          named_tool: null
+        finish_reason: stop
+        tools:
+        - name: get_weather
+          parameters:
+            type: object
+            properties:
+              city:
+                type: string
+        - name: f
+          parameters:
+            type: object
+            properties:
+              x:
+                type: string
+        - name: g
+          parameters:
+            type: object
+            properties:
+              y:
+                type: string
+        - name: run
+          parameters:
+            type: object
+            properties:
+              cmd:
+                type: string
+        - name: log
+          parameters:
+            type: object
+            properties:
+              note:
+                type: string
+        - name: sum_values
+          parameters:
+            type: object
+            properties:
+              values:
+                type: array
+                items:
+                  type: number
+        - name: functions.
+          parameters:
+            type: object
+            properties: {}
+        chunks:
+        - delta_text: <function=get_time>
+        - delta_text: '
+
+            '
+        - delta_text: </function>
+        - delta_text: '
+
+            '
+        - delta_text: </tool_call>
+        - delta_text: ‹finish›
+      semantic_sha256: a975894bba122ba76d9a6a3e2297c26ce01657e79b182af50a9fe41a01910e0f
+    observation:
+      value:
+        assembled:
+        - kind: tool_call
+          name: get_time
+          arguments: {}
+        chunks:
+        - expected: []
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: get_time
+            arguments: '{}'
+            complete: true
+        - expected: []
+        - expected: []
+    case_key: UNIFIED.6-2
+  bare_saved_closer:
+    stimulus:
+      ref: current
+      semantic_sha256: 6633d7acbeef7e11e49d6052fde555cbfad9d93472ccd5789f08b23ace5f286b
+    observation:
+      value:
+        assembled: []
+        chunks:
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: run
+            arguments: '{"cmd":"first'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: </tool_call>
+            complete: false
+    case_key: UNIFIED.5-5
+  wrapped_saved_closer_partial_marker:
+    stimulus:
+      ref: current
+      semantic_sha256: 91ddb3fe3a777cec319ccf29c2f750b0892b2e5991a152f3d20d1ff5a7d09e5a
+    observation:
+      value:
+        assembled: []
+        chunks:
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: run
+            arguments: '{"cmd":"first'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: </tool_call>
+            complete: false
+        - expected: []
+    case_key: UNIFIED.5-4
+metadata_changes: {}
+document_overrides: {}

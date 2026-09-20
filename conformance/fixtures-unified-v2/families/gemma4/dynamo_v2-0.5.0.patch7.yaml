@@ -1,0 +1,110 @@
+schema_version: 2
+family: gemma4
+implementation: dynamo_v2
+parent: dynamo_v2-0.4.1.patch7
+runtime_version: 0.5.0.patch7
+provenance:
+  status: captured
+  record:
+    crate_version: 0.5.0
+    git_commit: 3c6e57342c897336c7e95764504cc693e77c1d5b
+    git_head_tree: b65ee60137f29a4c0242eb38f50da7f988ade25e
+    kind: release
+    label: 0.5.0
+    release_commit: 3c6e57342c897336c7e95764504cc693e77c1d5b
+    release_tag: dynamo-parsers-v2-v0.5.0
+    source_id: sha256:f983f5cae9ab75f09cc1bc042611b5b28923a08ebf1ff2c6026df56d02064eaf
+    source_paths:
+    - parsers/v1/src
+    - parsers/v1/Cargo.toml
+    - parsers/v1/build.rs
+    - parsers/v2/src
+    - parsers/v2/Cargo.toml
+    - parsers/v2/build.rs
+    - protocols/src
+    - protocols/Cargo.toml
+    - protocols/build.rs
+    - Cargo.toml
+    - Cargo.lock
+    - rust-toolchain
+    - rust-toolchain.toml
+    - .cargo
+    source_sha256: f983f5cae9ab75f09cc1bc042611b5b28923a08ebf1ff2c6026df56d02064eaf
+completeness: delta
+document:
+  mode: unified
+import_lineage: []
+changes:
+  bare_parameterless_call:
+    stimulus:
+      inline:
+        input: call:get_time{}<tool_call|>
+        init:
+          starting_state: None
+          tool_output_mode: Native
+          named_tool: null
+        finish_reason: stop
+        tools:
+        - name: get_weather
+          parameters:
+            type: object
+            properties:
+              city:
+                type: string
+        - name: f
+          parameters:
+            type: object
+            properties:
+              x:
+                type: string
+        - name: g
+          parameters:
+            type: object
+            properties:
+              y:
+                type: string
+        - name: run
+          parameters:
+            type: object
+            properties:
+              cmd:
+                type: string
+        - name: log
+          parameters:
+            type: object
+            properties:
+              note:
+                type: string
+        - name: sum_values
+          parameters:
+            type: object
+            properties:
+              values:
+                type: array
+                items:
+                  type: number
+        - name: functions.
+          parameters:
+            type: object
+            properties: {}
+        chunks:
+        - delta_text: call:get_time{}
+        - delta_text: <tool_call|>
+        - delta_text: ‹finish›
+      semantic_sha256: 82821430ba77a7a36df07ff114c941e93d2ba3460e39cfe59d920d2d3fa349aa
+    observation:
+      value:
+        assembled:
+        - kind: tool_call
+          name: get_time
+          arguments: {}
+        chunks:
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: get_time
+            arguments: '{}'
+            complete: true
+    case_key: UNIFIED.6-2
+metadata_changes: {}
+document_overrides: {}

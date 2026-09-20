@@ -382,9 +382,9 @@ pub fn fixture_name(path: &Path) -> String {
         .to_string()
 }
 
-/// Historical stream baseline, not the current source identity. The legacy CURRENT
-/// name is retained for stream parity callers; Unified resolves its source separately.
-pub const STREAM_DYNAMO_V2_CURRENT_CAPTURE: &str = "dynamo_v2-0.5.1";
+/// Source-qualified stream capture produced by the same parser tree as this branch.
+pub const STREAM_DYNAMO_V2_CURRENT_CAPTURE: &str =
+    "dynamo_v2-0.6.1+source.e8edaa1bc2b5dc4cafb1fa81af4164adcf8ddbf02f8a12e0fd82d8d617e59d81";
 
 // Consumers may reuse verified archives in tagless clones; producers still require tags.
 pub const UNIFIED_DYNAMO_V2_CURRENT_CAPTURE: &str = "dynamo_v2-current";

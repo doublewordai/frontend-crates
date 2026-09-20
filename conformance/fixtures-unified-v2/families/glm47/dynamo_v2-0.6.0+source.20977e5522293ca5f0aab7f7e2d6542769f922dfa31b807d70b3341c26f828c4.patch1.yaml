@@ -1,0 +1,467 @@
+schema_version: 2
+family: glm47
+implementation: dynamo_v2
+parent: null
+runtime_version: 0.6.0+source.20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4.patch1
+provenance:
+  status: mixed
+  record_count: 0
+completeness: snapshot
+import_lineage: []
+document:
+  mode: unified
+document_overrides:
+  guided_json_native_envelope_after_prose:
+    capture_provenance:
+      crate_version: 0.6.0
+      git_commit: 581e56351382518d3922c8ae88b328774ff692a9
+      git_head_tree: d314f0cf1524d3688c4bb5462ab10175fe5b0c38
+      kind: unpublished
+      label: 0.6.0+source.20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+      release_commit: null
+      release_tag: null
+      source_id: sha256:20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+      source_paths:
+      - parsers/v1/src
+      - parsers/v1/Cargo.toml
+      - parsers/v1/build.rs
+      - parsers/v2/src
+      - parsers/v2/Cargo.toml
+      - parsers/v2/build.rs
+      - protocols/src
+      - protocols/Cargo.toml
+      - protocols/build.rs
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain
+      - rust-toolchain.toml
+      - .cargo
+      source_sha256: 20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+    captured_with:
+      dynamo_v2: 0.6.0+source.20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+  wrapped_saved_closer_partial_marker:
+    capture_provenance:
+      crate_version: 0.6.0
+      git_commit: 581e56351382518d3922c8ae88b328774ff692a9
+      git_head_tree: d314f0cf1524d3688c4bb5462ab10175fe5b0c38
+      kind: unpublished
+      label: 0.6.0+source.20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+      release_commit: null
+      release_tag: null
+      source_id: sha256:20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+      source_paths:
+      - parsers/v1/src
+      - parsers/v1/Cargo.toml
+      - parsers/v1/build.rs
+      - parsers/v2/src
+      - parsers/v2/Cargo.toml
+      - parsers/v2/build.rs
+      - protocols/src
+      - protocols/Cargo.toml
+      - protocols/build.rs
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain
+      - rust-toolchain.toml
+      - .cargo
+      source_sha256: 20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+    captured_with:
+      dynamo_v2: 0.6.0+source.20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+  bare_saved_closer:
+    capture_provenance:
+      crate_version: 0.6.0
+      git_commit: 581e56351382518d3922c8ae88b328774ff692a9
+      git_head_tree: d314f0cf1524d3688c4bb5462ab10175fe5b0c38
+      kind: unpublished
+      label: 0.6.0+source.20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+      release_commit: null
+      release_tag: null
+      source_id: sha256:20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+      source_paths:
+      - parsers/v1/src
+      - parsers/v1/Cargo.toml
+      - parsers/v1/build.rs
+      - parsers/v2/src
+      - parsers/v2/Cargo.toml
+      - parsers/v2/build.rs
+      - protocols/src
+      - protocols/Cargo.toml
+      - protocols/build.rs
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain
+      - rust-toolchain.toml
+      - .cargo
+      source_sha256: 20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+    captured_with:
+      dynamo_v2: 0.6.0+source.20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+  bare_parameterless_call:
+    capture_provenance:
+      crate_version: 0.6.0
+      git_commit: 581e56351382518d3922c8ae88b328774ff692a9
+      git_head_tree: d314f0cf1524d3688c4bb5462ab10175fe5b0c38
+      kind: unpublished
+      label: 0.6.0+source.20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+      release_commit: null
+      release_tag: null
+      source_id: sha256:20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+      source_paths:
+      - parsers/v1/src
+      - parsers/v1/Cargo.toml
+      - parsers/v1/build.rs
+      - parsers/v2/src
+      - parsers/v2/Cargo.toml
+      - parsers/v2/build.rs
+      - protocols/src
+      - protocols/Cargo.toml
+      - protocols/build.rs
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain
+      - rust-toolchain.toml
+      - .cargo
+      source_sha256: 20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+    captured_with:
+      dynamo_v2: 0.6.0+source.20977e5522293ca5f0aab7f7e2d6542769f922dfa31b807d70b3341c26f828c4
+changes:
+  bare_parameterless_call:
+    observation:
+      value:
+        assembled:
+        - kind: text
+          text: get_time
+        chunks:
+        - expected: []
+        - expected:
+          - kind: text
+            text: get_time
+    stimulus:
+      inline:
+        input: get_time</tool_call>
+        init:
+          starting_state: None
+          tool_output_mode: Native
+          named_tool: null
+        finish_reason: stop
+        tools:
+        - name: get_weather
+          parameters:
+            type: object
+            properties:
+              city:
+                type: string
+        - name: f
+          parameters:
+            type: object
+            properties:
+              x:
+                type: string
+        - name: g
+          parameters:
+            type: object
+            properties:
+              y:
+                type: string
+        - name: run
+          parameters:
+            type: object
+            properties:
+              cmd:
+                type: string
+        - name: log
+          parameters:
+            type: object
+            properties:
+              note:
+                type: string
+        - name: sum_values
+          parameters:
+            type: object
+            properties:
+              values:
+                type: array
+                items:
+                  type: number
+        - name: functions.
+          parameters:
+            type: object
+            properties: {}
+        chunks:
+        - delta_text: get_time
+        - delta_text: </tool_call>
+        - delta_text: ‹finish›
+      semantic_sha256: 7ac4f81045ab8cdbac10e25e36a3f5806c1b45e8b9d68f3e4e4d9d9721deec71
+    case_key: UNIFIED.6-2
+  bare_saved_closer:
+    observation:
+      value:
+        assembled: []
+        chunks:
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+    stimulus:
+      inline:
+        input: run<arg_key>cmd</arg_key><arg_value>first</tool_call>
+        init:
+          starting_state: None
+          tool_output_mode: Native
+          named_tool: null
+        finish_reason: length
+        tools:
+        - name: get_weather
+          parameters:
+            type: object
+            properties:
+              city:
+                type: string
+        - name: f
+          parameters:
+            type: object
+            properties:
+              x:
+                type: string
+        - name: g
+          parameters:
+            type: object
+            properties:
+              y:
+                type: string
+        - name: run
+          parameters:
+            type: object
+            properties:
+              cmd:
+                type: string
+        - name: log
+          parameters:
+            type: object
+            properties:
+              note:
+                type: string
+        - name: sum_values
+          parameters:
+            type: object
+            properties:
+              values:
+                type: array
+                items:
+                  type: number
+        - name: functions.
+          parameters:
+            type: object
+            properties: {}
+        chunks:
+        - delta_text: run
+        - delta_text: <arg_key>
+        - delta_text: cmd
+        - delta_text: </arg_key>
+        - delta_text: <arg_value>
+        - delta_text: first
+        - delta_text: </tool_call>
+        - delta_text: ‹finish›
+      semantic_sha256: 84e3431667784e5f50fabc824b15bc8382cc4124010c026d1263a2249b1903bd
+    case_key: UNIFIED.5-5
+  guided_json_native_envelope_after_prose:
+    observation:
+      value:
+        assembled:
+        - kind: text
+          text: hello runcmd
+        - kind: tool_call
+          name: get_weather
+          arguments:
+            city: Paris
+        - kind: text
+          text: </arg_value>
+        chunks:
+        - expected: []
+        - expected:
+          - kind: text
+            text: 'hello '
+        - expected: []
+        - expected:
+          - kind: text
+            text: run
+        - expected: []
+        - expected:
+          - kind: text
+            text: cmd
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: get_weather
+            arguments: '{"city": "Paris"}'
+            complete: true
+        - expected:
+          - kind: text
+            text: </arg_value>
+        - expected: []
+    stimulus:
+      inline:
+        input: 'hello <tool_call>run<arg_key>cmd</arg_key><arg_value>[{"name": "get_weather", "arguments": {"city": "Paris"}}]</arg_value></tool_call>'
+        init:
+          starting_state: None
+          tool_output_mode: GuidedJson
+          named_tool: null
+        finish_reason: stop
+        tools:
+        - name: get_weather
+          parameters:
+            type: object
+            properties:
+              city:
+                type: string
+        - name: f
+          parameters:
+            type: object
+            properties:
+              x:
+                type: string
+        - name: g
+          parameters:
+            type: object
+            properties:
+              y:
+                type: string
+        - name: run
+          parameters:
+            type: object
+            properties:
+              cmd:
+                type: string
+        - name: log
+          parameters:
+            type: object
+            properties:
+              note:
+                type: string
+        - name: sum_values
+          parameters:
+            type: object
+            properties:
+              values:
+                type: array
+                items:
+                  type: number
+        - name: functions.
+          parameters:
+            type: object
+            properties: {}
+        chunks:
+        - delta_text: 'hello '
+        - delta_text: <tool_call>
+        - delta_text: run
+        - delta_text: <arg_key>
+        - delta_text: cmd
+        - delta_text: </arg_key>
+        - delta_text: <arg_value>
+        - delta_text: '[{"name": "get_weather", "arguments": {"city": "Paris"}}]'
+        - delta_text: </arg_value>
+        - delta_text: </tool_call>
+        - delta_text: ‹finish›
+      semantic_sha256: 55925598d8c2a84ab88302791afee90dd79ff4dc6798fa18c10ee2a99a5c09e7
+    case_key: UNIFIED.32-6
+  wrapped_saved_closer_partial_marker:
+    observation:
+      value:
+        assembled: []
+        chunks:
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+    stimulus:
+      inline:
+        input: <tool_call>run<arg_key>cmd</arg_key><arg_value>first</tool_call><
+        init:
+          starting_state: None
+          tool_output_mode: Native
+          named_tool: null
+        finish_reason: length
+        tools:
+        - name: get_weather
+          parameters:
+            type: object
+            properties:
+              city:
+                type: string
+        - name: f
+          parameters:
+            type: object
+            properties:
+              x:
+                type: string
+        - name: g
+          parameters:
+            type: object
+            properties:
+              y:
+                type: string
+        - name: run
+          parameters:
+            type: object
+            properties:
+              cmd:
+                type: string
+        - name: log
+          parameters:
+            type: object
+            properties:
+              note:
+                type: string
+        - name: sum_values
+          parameters:
+            type: object
+            properties:
+              values:
+                type: array
+                items:
+                  type: number
+        - name: functions.
+          parameters:
+            type: object
+            properties: {}
+        chunks:
+        - delta_text: <tool_call>
+        - delta_text: run
+        - delta_text: <arg_key>
+        - delta_text: cmd
+        - delta_text: </arg_key>
+        - delta_text: <arg_value>
+        - delta_text: first
+        - delta_text: </tool_call>
+        - delta_text: <
+        - delta_text: ‹finish›
+      semantic_sha256: 6e456fdf1a5d3365eb224b178bb3390b6811cb1b182a6f5fce64a5a4aff741b1
+    case_key: UNIFIED.5-4
+metadata_changes:
+  bare_parameterless_call:
+    init:
+      starting_state: None
+      tool_output_mode: Native
+      named_tool: null
+  bare_saved_closer:
+    init:
+      starting_state: None
+      tool_output_mode: Native
+      named_tool: null
+  guided_json_native_envelope_after_prose:
+    init:
+      starting_state: None
+      tool_output_mode: GuidedJson
+      named_tool: null
+  wrapped_saved_closer_partial_marker:
+    init:
+      starting_state: None
+      tool_output_mode: Native
+      named_tool: null
