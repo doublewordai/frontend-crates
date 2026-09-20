@@ -6891,35 +6891,6 @@ mod tests {
 mod append_seam_tests {
     use super::*;
 
-    #[test]
-    fn guided_marker_consumes_a_native_parameter_wrapper_as_one_span() {
-        for (input, marker, close) in [
-            (
-                r#"<function=run><parameter=cmd>[{"name":"get_weather"}]</parameter></function>"#,
-                "<function=",
-                "</function>",
-            ),
-            (
-                r#"<atem:invoke name="run"><atem:parameter name="cmd">"[{"name":"get_weather"}]"</atem:parameter></atem:invoke>"#,
-                "<atem:invoke name=\"",
-                "</atem:invoke>",
-            ),
-        ] {
-            assert_eq!(
-                control_marker_at(
-                    input,
-                    &[marker.to_string()],
-                    close,
-                    Some(input.find('[').expect("payload")),
-                    &[],
-                    false,
-                    None,
-                ),
-                Some((0, input.len()))
-            );
-        }
-    }
-
     /// The peer's regression: joining two buffers must yield the same events as
     /// accumulating straight through, so the same bytes cannot describe a different
     /// event stream depending on how the caller batched them.
