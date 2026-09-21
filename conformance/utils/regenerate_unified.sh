@@ -63,7 +63,7 @@ import sys
 sys.path.insert(0, "conformance/utils/src")
 import gen_unified_golden as golden
 from dynamo_version import dynamo_v2_provenance
-from fixture_disposition import capture_layer_sort_key
+from fixtures import _version_sort_key
 from unified_history import load_store
 from unified_taxonomy import numbered_id
 
@@ -95,15 +95,16 @@ for family, case_ids in expected.items():
     }
     history = store.histories[(family, "dynamo_v2")]
     current_captures = [
-        capture_id
-        for capture_id in history.captures
-        if capture_layer_sort_key(capture_id)[0] == f"dynamo_v2-{current_version}"
+        (capture_id, capture)
+        for capture_id, capture in history.captures.items()
+        if _version_sort_key(capture["runtime_version"]) <= _version_sort_key(current_version)
     ]
     if not current_captures:
-        raise SystemExit(f"missing generated Unified capture: dynamo_v2-{current_version}/{family}")
-    current_label = max(current_captures, key=capture_layer_sort_key)
-    if current_label not in history.captures:
-        raise SystemExit(f"missing generated Unified capture: {current_label}/{family}")
+        raise SystemExit(f"missing generated Unified capture at or before {current_version}/{family}")
+    current_label, _capture = max(
+        current_captures,
+        key=lambda item: _version_sort_key(item[1]["runtime_version"]),
+    )
     captured = {
         history.family.cases[case_id]["display_id"]
         for case_id in history.resolve(current_label)

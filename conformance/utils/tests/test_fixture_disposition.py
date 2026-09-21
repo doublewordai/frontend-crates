@@ -439,7 +439,14 @@ def test_extract_holds_generation_lock_through_shard_materialization(tmp_path, m
         assert release_reader.wait(timeout=5)
         return fixtures / "toolcalling/a.tar.gz"
 
-    def materialize_shard(_shard, _source, destination, verbose=False):
+    def materialize_shard(
+        _shard,
+        _source,
+        destination,
+        *,
+        derived_release_versions=None,
+        verbose=False,
+    ):
         destination.mkdir(parents=True, exist_ok=True)
         (destination / "materialized").write_text("old")
 

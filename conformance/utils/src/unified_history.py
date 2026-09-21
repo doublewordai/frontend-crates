@@ -1179,7 +1179,13 @@ def _capture_release_sort_key(runtime_version: str) -> tuple:
     return numeric, 0 if separator else 1, prerelease
 
 
-def materialize_store(root: Path, destination: Path, *, include_current_inputs: bool = True) -> None:
+def materialize_store(
+    root: Path,
+    destination: Path,
+    *,
+    include_current_inputs: bool = True,
+    derived_release_versions: dict[str, str] | None = None,
+) -> None:
     store = load_store(root)
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
@@ -1255,6 +1261,10 @@ def materialize_store(root: Path, destination: Path, *, include_current_inputs: 
             case_key = change["case_key"]
             record, document_metadata = _materialized_record(case, change)
             document_metadata = dict(document_metadata)
+            # Rust readers pass this field to the shared Python selector. Keep a
+            # generated schema marker so an omitted legacy provenance and an
+            # intentional schema-v3 semantic view do not collapse into null.
+            document_metadata["capture_provenance"] = {"format": "schema_v3"}
             record_metadata = document_metadata.pop("record_metadata", {})
             record.update(record_metadata)
             document = _case_document(document_metadata, family_name, case_key, record)
@@ -1269,6 +1279,20 @@ def materialize_store(root: Path, destination: Path, *, include_current_inputs: 
         )
         for capture_id, capture in history.captures.items():
             add_capture_state(capture_id, history, history.resolve(capture_id))
+
+    # The YAML store remains sparse: a release with no changed family output has
+    # no checkpoint file. Consumers still need a complete directory for the
+    # released version, so extraction may request a derived release view.
+    for implementation, runtime_version in (derived_release_versions or {}).items():
+        if not isinstance(implementation, str) or not isinstance(runtime_version, str):
+            raise ValueError("derived release versions must map strings to strings")
+        if not fixture_disposition.DYNAMO_VERSION_RE.fullmatch(runtime_version):
+            raise ValueError(f"invalid derived release version: {runtime_version}")
+        if implementation not in capture_ids_by_implementation:
+            raise ValueError(f"no Unified captures for derived implementation: {implementation}")
+        capture_ids_by_implementation[implementation].add(
+            f"{implementation}-{runtime_version}"
+        )
 
     # A capture directory is a complete release view. If only one family was
     # recaptured for a source identity, carry every other family forward from its
@@ -1530,6 +1554,11 @@ def _update_from_loose(
                 raw = path.read_bytes()
                 document = _load_loose_document(path, family_name)
                 metadata = {name: value for name, value in document.items() if name != "cases"}
+                # A schema-v3 marker belongs only to the extracted compatibility
+                # view. It must not become canonical capture metadata when that
+                # view is ingested again.
+                if metadata.get("capture_provenance") == {"format": "schema_v3"}:
+                    metadata.pop("capture_provenance")
                 for case_key, record in document["cases"].items():
                     external = (
                         family_name,
@@ -1631,8 +1660,19 @@ def _update_from_loose(
             for case_id in sorted(set(prior) | set(records)):
                 before = prior.get(case_id)
                 after = records.get(case_id)
-                before_key = None if before is None else _canonical_json(_semantic_change(before))
-                after_key = None if after is None else _canonical_json(_semantic_change(after))
+                # Display IDs are renumbered independently of capture semantics.
+                # Compare by the stable case ID so a renamed case is inherited,
+                # while a changed observation or stimulus still creates a capture.
+                before_key = (
+                    None
+                    if before is None
+                    else _canonical_json(_capture_semantic(before, case_id))
+                )
+                after_key = (
+                    None
+                    if after is None
+                    else _canonical_json(_capture_semantic(after, case_id))
+                )
                 if before_key != after_key:
                     changes[case_id] = (
                         {"absent": True} if after is None else _stored_change(after)
@@ -1666,6 +1706,10 @@ def _update_from_loose(
                 for case_id, record in records.items()
                 if "parser_path" in record["document"]
             }
+            # Extraction may derive a complete semantic release directory from
+            # an earlier checkpoint. That inherited view is not a new capture.
+            if not changes and not metadata_changes and not document_overrides:
+                continue
             capture = {
                 "runtime_version": runtime_version,
                 "provenance": provenance,
