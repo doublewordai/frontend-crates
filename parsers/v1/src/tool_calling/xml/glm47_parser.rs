@@ -472,16 +472,6 @@ fn consume_glm47_close_markers(text: &str, mut cursor: usize, config: &Glm47Pars
     }
 }
 
-/// Decode XML character entities in a string.
-/// Handles the five predefined XML entities: &lt; &gt; &amp; &quot; &apos;
-fn decode_xml_entities(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-}
-
 /// Coerce a raw string value using the tool's parameter schema.
 /// Falls back to string if no schema is available or the type is unrecognized.
 fn coerce_value(raw: &str, schema_type: Option<&str>) -> ParsedValue {
@@ -609,12 +599,12 @@ fn parse_tool_call_block(
         let raw_value = cap.get(2).map(|m| m.as_str()).unwrap_or("");
 
         if !key.is_empty() {
-            // Decode XML entities (e.g. &lt; → <, &amp; → &) before parsing
-            let decoded = decode_xml_entities(raw_value);
-
-            // Look up the expected type from the tool's parameter schema
+            // The value is delivered as the model wrote it. GLM does not XML-escape
+            // argument text, so `&amp;` in a value is source text (JSX, HTML), not an
+            // escape: decoding it makes exact-match edit tools miss and rewrites the
+            // code a write tool receives.
             let schema_type = get_param_schema_type(tools, &function_name, key);
-            let json_value = coerce_value(&decoded, schema_type);
+            let json_value = coerce_value(raw_value, schema_type);
 
             arguments.insert(key.to_string(), json_value);
         }
@@ -644,6 +634,47 @@ mod tests {
 
     fn get_test_config() -> Glm47ParserConfig {
         Glm47ParserConfig::default()
+    }
+
+    fn edit_file_tools() -> Vec<ToolDefinition> {
+        vec![ToolDefinition {
+            name: "edit_file".to_string(),
+            parameters: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "old_str": {"type": "string"},
+                    "content": {"type": "string"},
+                    "edits": {"type": "array"}
+                }
+            })),
+            strict: None,
+        }]
+    }
+
+    fn parse_args(input: &str) -> serde_json::Value {
+        let (calls, _) =
+            try_tool_call_parse_glm47(input, &get_test_config(), Some(&edit_file_tools())).unwrap();
+        assert_eq!(calls.len(), 1);
+        serde_json::from_str(&calls[0].function.arguments).unwrap()
+    }
+
+    #[test]
+    fn test_argument_text_keeps_xml_entities() {
+        let line =
+            "<h2>System &amp; Intelligence &mdash; that&apos;s it &lt;3 &quot;x&quot; &gt;</h2>";
+        let input = format!(
+            "<tool_call>edit_file<arg_key>path</arg_key><arg_value>app.jsx</arg_value><arg_key>old_str</arg_key><arg_value>{line}</arg_value></tool_call>"
+        );
+        assert_eq!(parse_args(&input)["old_str"], line);
+    }
+
+    #[test]
+    fn test_array_argument_keeps_xml_entities_inside_json() {
+        let input = r#"<tool_call>edit_file<arg_key>path</arg_key><arg_value>app.jsx</arg_value><arg_key>edits</arg_key><arg_value>[{"old_str": "a &amp; b", "new_str": "a &amp; c"}]</arg_value></tool_call>"#;
+        let args = parse_args(input);
+        assert_eq!(args["edits"][0]["old_str"], "a &amp; b");
+        assert_eq!(args["edits"][0]["new_str"], "a &amp; c");
     }
 
     #[test] // helper
@@ -971,7 +1002,7 @@ mod tests {
     }
 
     #[test] // helper
-    fn test_xml_entity_decoding() {
+    fn test_xml_entities_are_not_decoded() {
         let config = get_test_config();
         let message = r#"<tool_call>write_file<arg_key>content</arg_key><arg_value>x &lt; y &amp;&amp; y &gt; z</arg_value></tool_call>"#;
 
@@ -982,7 +1013,7 @@ mod tests {
             serde_json::from_str(&calls[0].function.arguments).unwrap();
         assert_eq!(
             args.get("content").unwrap().as_str().unwrap(),
-            "x < y && y > z"
+            "x &lt; y &amp;&amp; y &gt; z"
         );
     }
 
