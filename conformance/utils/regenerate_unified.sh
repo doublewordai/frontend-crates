@@ -62,7 +62,8 @@ import sys
 
 sys.path.insert(0, "conformance/utils/src")
 import gen_unified_golden as golden
-from dynamo_version import dynamo_v2_label
+from dynamo_version import dynamo_v2_provenance
+from fixture_disposition import capture_layer_sort_key
 from unified_history import load_store
 from unified_taxonomy import numbered_id
 
@@ -75,8 +76,16 @@ expected = {
     }
     for family in golden.FAMILIES
 }
+expected_red = {
+    family: {
+        key[len("UNIFIED."):].rsplit(".", 1)[0]
+        for key, case in golden.build_cases(family).items()
+        if case.get("expect", {}).get("dynamo_current", {}).get("verdict") == "diverge"
+    }
+    for family in golden.FAMILIES
+}
 
-current_label = f"dynamo_v2-{dynamo_v2_label(Path.cwd())}"
+current_version = dynamo_v2_provenance(Path.cwd())["crate_version"]
 store = load_store(root)
 for family, case_ids in expected.items():
     canonical = {
@@ -85,6 +94,14 @@ for family, case_ids in expected.items():
         if case["lifecycle"] == "active"
     }
     history = store.histories[(family, "dynamo_v2")]
+    current_captures = [
+        capture_id
+        for capture_id in history.captures
+        if capture_layer_sort_key(capture_id)[0] == f"dynamo_v2-{current_version}"
+    ]
+    if not current_captures:
+        raise SystemExit(f"missing generated Unified capture: dynamo_v2-{current_version}/{family}")
+    current_label = max(current_captures, key=capture_layer_sort_key)
     if current_label not in history.captures:
         raise SystemExit(f"missing generated Unified capture: {current_label}/{family}")
     captured = {
@@ -101,12 +118,29 @@ for family, case_ids in expected.items():
                 f"missing={missing} extra={extra}"
             )
 
+seen_reports = set()
 for report in current["reports"]:
-    if report.get("tab") == "tab-unified" and (report["empty"] or report["red"]):
+    if report.get("tab") != "tab-unified":
+        continue
+    family = report["model"]
+    seen_reports.add(family)
+    actual_red = {
+        issue["scenario"]
+        for issue in report.get("issues", [])
+        if issue.get("state") == "red"
+    }
+    if report["empty"] or actual_red != expected_red[family]:
         raise SystemExit(
-            f"Unified display is not clean for {report['model']}: "
-            f"empty={report['empty']} red={report['red']}"
+            f"Unified display differs from documented current-Dynamo expectations for {family}: "
+            f"empty={report['empty']} expected_red={sorted(expected_red[family])} "
+            f"actual_red={sorted(actual_red)}"
         )
+if seen_reports != set(golden.FAMILIES):
+    raise SystemExit(
+        f"Unified display families differ from the generator: "
+        f"missing={sorted(set(golden.FAMILIES) - seen_reports)} "
+        f"extra={sorted(seen_reports - set(golden.FAMILIES))}"
+    )
 
 print("Unified regeneration gate passed: generated YAML history and rendered JSON are current.")
 PY

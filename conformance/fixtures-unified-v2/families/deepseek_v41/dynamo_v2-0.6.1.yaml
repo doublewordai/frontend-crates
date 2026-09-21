@@ -1,8 +1,8 @@
 schema_version: 2
-family: muse_glimmer
+family: deepseek_v41
 implementation: dynamo_v2
-parent: dynamo_v2-0.6.1+source.65b6e028637ed1b7dbd47d4ff52b989be343ba94d44becca626d5292de62078d
-runtime_version: 0.6.1+source.d34b99849487da9b417502f108ed9cbb32657a48cb63b6899d501d12b1fde5d3
+parent: dynamo_v2-0.6.0.patch1
+runtime_version: 0.6.1
 provenance:
   status: captured
   record:

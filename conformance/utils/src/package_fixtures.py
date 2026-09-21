@@ -233,9 +233,13 @@ def build_shards(
             )
             required_capture_dirs = frozenset()
             if complete_snapshot:
-                required_capture_dirs = {
-                    f"dynamo_v2-{dynamo_version.dynamo_v2_label(ROOT)}"
-                }
+                required_capture_dirs = frozenset(
+                    path.name
+                    for path in capture_root.iterdir()
+                    if path.is_dir()
+                    and path.name.startswith("dynamo_v2-")
+                    and "+pr" not in path.name
+                )
             changed = unified_history.update_store_from_loose(
                 history_root,
                 capture_root,

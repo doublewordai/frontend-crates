@@ -689,9 +689,11 @@ def _canonical_store_root(root: Path) -> Path:
 
 def _capture_metadata(histories: dict[tuple[str, str], History]) -> dict[str, dict]:
     metadata_by_capture: dict[str, dict] = {}
+    status_by_capture: dict[str, str | None] = {}
     for history in histories.values():
         for capture_id, capture in history.captures.items():
             provenance = capture["provenance"]
+            provenance_status = provenance.get("status")
             if provenance.get("status") == "captured":
                 if "record" in provenance:
                     provenance_identity = (
@@ -736,7 +738,22 @@ def _capture_metadata(histories: dict[tuple[str, str], History]) -> dict[str, di
                 "provenance": provenance_identity,
             }
             prior = metadata_by_capture.setdefault(capture_id, metadata)
-            if prior != metadata:
+            prior_status = status_by_capture.setdefault(capture_id, provenance_status)
+            if prior["runtime_version"] != metadata["runtime_version"]:
+                raise ValueError(f"capture metadata differs across families: {capture_id}")
+            # A version-only capture is a shared release view, but each family
+            # may have been captured from a different producer state or may be
+            # inherited. Keep that provenance on the family history. A
+            # source-qualified capture, by contrast, names one exact producer
+            # identity and must agree across families.
+            version_only_family_provenance = {prior_status, provenance_status} <= {
+                "captured",
+                "mixed",
+            }
+            if (
+                ("+source." in capture_id or not version_only_family_provenance)
+                and prior["provenance"] != metadata["provenance"]
+            ):
                 raise ValueError(f"capture metadata differs across families: {capture_id}")
     return metadata_by_capture
 
@@ -1285,6 +1302,14 @@ def _materialized_record(case: dict, change: dict) -> tuple[dict, dict]:
     return record, change["document"]
 
 
+def _capture_release_sort_key(runtime_version: str) -> tuple:
+    base_version, patch = fixture_disposition.capture_layer_sort_key(runtime_version)
+    release_version = base_version.split("+", 1)[0]
+    release, separator, prerelease = release_version.partition("-")
+    numeric = tuple(int(part) for part in release.split("."))
+    return numeric, 0 if separator else 1, prerelease, base_version, patch
+
+
 def materialize_store(root: Path, destination: Path, *, include_current_inputs: bool = True) -> None:
     store = load_store(root)
     destination = Path(destination)
@@ -1354,19 +1379,64 @@ def materialize_store(root: Path, destination: Path, *, include_current_inputs: 
                 _case_document(golden_metadata, family_name, case_key, case["golden"]),
             )
 
+    def add_capture_state(directory: str, history: History, state: dict) -> None:
+        family_name = history.family.name
+        for case_id, change in sorted(state.items()):
+            case = history.family.cases[case_id]
+            case_key = change["case_key"]
+            record, document_metadata = _materialized_record(case, change)
+            document_metadata = dict(document_metadata)
+            record_metadata = document_metadata.pop("record_metadata", {})
+            record.update(record_metadata)
+            document = _case_document(document_metadata, family_name, case_key, record)
+            relative = Path(directory) / family_name / f"{case_key}.yaml"
+            if relative not in written:
+                add_document(directory, family_name, case_key, document)
+
     capture_metadata = store.capture_metadata
+    capture_ids_by_implementation: dict[str, set[str]] = {}
     for (family_name, _implementation), history in sorted(store.histories.items()):
+        capture_ids_by_implementation.setdefault(history.implementation, set()).update(
+            history.captures
+        )
         for capture_id, capture in history.captures.items():
-            state = history.resolve(capture_id)
-            for case_id, change in sorted(state.items()):
-                case = history.family.cases[case_id]
-                case_key = change["case_key"]
-                record, document_metadata = _materialized_record(case, change)
-                document_metadata = dict(document_metadata)
-                record_metadata = document_metadata.pop("record_metadata", {})
-                record.update(record_metadata)
-                document = _case_document(document_metadata, family_name, case_key, record)
-                add_document(capture_id, family_name, case_key, document)
+            add_capture_state(capture_id, history, history.resolve(capture_id))
+
+    # A capture directory is a complete release view. If only one family was
+    # recaptured for a source identity, carry every other family forward from its
+    # newest capture at the same or an earlier crate version.
+    for implementation, target_ids in sorted(capture_ids_by_implementation.items()):
+        histories = [
+            history
+            for (_family, impl), history in sorted(store.histories.items())
+            if impl == implementation
+        ]
+        for target_id in sorted(
+            target_ids,
+            key=lambda capture_id: _capture_release_sort_key(
+                capture_id.removeprefix(f"{implementation}-")
+            ),
+        ):
+            target_version = target_id.removeprefix(f"{implementation}-")
+            target_release = _capture_release_sort_key(target_version)[:3]
+            for history in histories:
+                if target_id in history.captures:
+                    continue
+                eligible = [
+                    capture_id
+                    for capture_id, capture in history.captures.items()
+                    if _capture_release_sort_key(capture["runtime_version"])[:3]
+                    <= target_release
+                ]
+                if not eligible:
+                    continue
+                source_id = max(
+                    eligible,
+                    key=lambda capture_id: _capture_release_sort_key(
+                        history.captures[capture_id]["runtime_version"]
+                    ),
+                )
+                add_capture_state(target_id, history, history.resolve(source_id))
 
     _write_materialized_documents(documents)
 
@@ -1497,7 +1567,7 @@ def _validate_new_capture_provenance(
     record = identity.get("capture_provenance")
     if record is None:
         return
-    if not isinstance(record, dict) or record.get("label") != expected_version:
+    if not isinstance(record, dict):
         raise ValueError(
             f"capture provenance differs from its runtime identity: {capture_id}"
         )
@@ -1509,12 +1579,19 @@ def _validate_new_capture_provenance(
         raise ValueError(f"capture has an invalid producer provenance identity: {capture_id}")
     if kind == "unpublished":
         source = _unpublished_provenance_identity(record)
-        valid = source is not None and expected_version == (
-            f"{source['crate_version']}+source.{source['source_sha256']}"
-        )
+        base_version = expected_version.partition("+source.")[0]
+        valid = source is not None and source["crate_version"] == base_version
+        valid = valid and record["label"] in {
+            base_version,
+            f"{base_version}+source.{source['source_sha256']}",
+        }
     else:
         source = _source_provenance_identity(record, "release")
-        valid = source is not None and source["crate_version"] == expected_version
+        valid = (
+            source is not None
+            and source["crate_version"] == expected_version.partition("+source.")[0]
+            and record["label"] == expected_version.partition("+source.")[0]
+        )
     if not valid:
         raise ValueError(f"capture has an invalid producer provenance identity: {capture_id}")
 
@@ -1796,6 +1873,19 @@ def _update_from_loose(
                     )
                 )
             missing_active_families = sorted(set(expected_active_families) - set(families))
+            if required_capture and families:
+                target_release = _capture_release_sort_key(runtime_version)[:3]
+                missing_active_families = [
+                    family_name
+                    for family_name in missing_active_families
+                    if not any(
+                        _capture_release_sort_key(capture["runtime_version"])[:3]
+                        <= target_release
+                        for capture in store.histories[
+                            (family_name, implementation)
+                        ].captures.values()
+                    )
+                ]
             if missing_active_families:
                 missing = ", ".join(missing_active_families)
                 raise ValueError(
@@ -2056,6 +2146,20 @@ def _preserve_historical_stimulus(
             history._invalidate_resolution_cache()
 
 
+def _shared_corpus_roots(loose_root: Path, base: str) -> list[Path]:
+    """Return the released corpus root followed by PR overlays in numeric order."""
+    overlays = []
+    pattern = re.compile(rf"{re.escape(base)}\+pr(\d+)\.patch(\d+)")
+    for path in loose_root.iterdir():
+        if not path.is_dir():
+            continue
+        match = pattern.fullmatch(path.name)
+        if match is not None:
+            overlays.append((int(match.group(1)), int(match.group(2)), path))
+    overlays.sort(key=lambda row: (row[0], row[1]))
+    return [loose_root / base, *(path for _pr, _patch, path in overlays)]
+
+
 def _sync_current_corpus(
     store: Store,
     loose_root: Path,
@@ -2070,11 +2174,21 @@ def _sync_current_corpus(
         if complete_snapshot:
             raise ValueError("complete current snapshot needs inputs and golden roots")
         return documents
+    input_roots = _shared_corpus_roots(loose_root, "inputs")
+    golden_roots = _shared_corpus_roots(loose_root, "golden")
 
     family_documents = {}
     for family_name in sorted(store.families):
-        input_paths = sorted((inputs_root / family_name).glob("*.yaml"))
-        golden_paths = sorted((golden_root / family_name).glob("*.yaml"))
+        input_paths = [
+            path
+            for root in input_roots
+            for path in sorted((root / family_name).glob("*.yaml"))
+        ]
+        golden_paths = [
+            path
+            for root in golden_roots
+            for path in sorted((root / family_name).glob("*.yaml"))
+        ]
         if complete_snapshot and (not input_paths or not golden_paths):
             raise ValueError(f"complete current snapshot is missing family: {family_name}")
         input_documents = [
@@ -2102,7 +2216,7 @@ def _sync_current_corpus(
         family_documents[family_name] = (input_documents, golden_documents)
 
     known_families = set(store.families)
-    for root in (inputs_root, golden_root):
+    for root in (*input_roots, *golden_roots):
         unknown = sorted(
             path.name for path in root.iterdir() if path.is_dir() and path.name not in known_families
         )

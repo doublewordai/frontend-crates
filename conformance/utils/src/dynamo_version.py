@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Capture identity shared by refresh, explode, and the Rust capture harnesses.
 
-Plain versions require source equality with the release tag. Unpublished source
-defaults to ``<version>+source.<sha256>``; ``current`` explicitly selects that form.
+Capture directories are keyed by the crate version. Unpublished provenance may
+still carry ``<version>+source.<sha256>`` inside each YAML record; the source
+qualified directory spelling remains readable for legacy captures.
 The digest covers parser crates, the split-path protocol dependency, and workspace
 build inputs; conformance outputs are excluded so capture cannot change its own ID.
 """
@@ -170,10 +171,6 @@ def effective_capture_provenance(captures: dict) -> dict[str, list]:
             by_version[version] = dict(enumerate(layer))
             continue
         complete = layer["complete_snapshot"]
-        if complete and "+source." not in version:
-            raise ValueError("complete capture snapshot requires a source-qualified capture")
-        if patch and "+source." in version and not complete:
-            raise ValueError("source capture patch requires a complete capture snapshot")
         records = {}
         for key, provenance in layer["records"].items():
             family, case = key.split("/", 1)
@@ -193,14 +190,42 @@ def select_capture_label(repo_root: Path, captures: dict) -> str:
     current = dynamo_v2_provenance(repo_root)
     label = current["label"]
     if label in captures:
-        # One source fingerprint per selection, not per corpus case. Validate each
-        # distinct record once, without ignoring a surviving legacy record.
+        exact_records = 0
         for recorded in _unique_provenance(captures[label]):
-            _validate_provenance_identity(recorded, current)
+            try:
+                _validate_provenance_identity(recorded, current)
+                exact_records += 1
+            except ValueError:
+                _validate_inherited_provenance(recorded, current)
+        if exact_records == 0:
+            raise ValueError(
+                "capture feed source identity differs from the current checkout; "
+                "the selected capture has only inherited family records"
+            )
         return label
+    # New captures use the release version as their directory name. Their YAML
+    # records retain the source-qualified producer identity, so select this view
+    # when at least one record proves it came from the current checkout and the
+    # remaining records are valid inherited history.
+    version = current["crate_version"]
+    version_records = captures.get(version, [])
+    if version_records:
+        exact_records = 0
+        for recorded in _unique_provenance(version_records):
+            try:
+                _validate_provenance_identity(recorded, current)
+                exact_records += 1
+            except ValueError:
+                continue
+        if exact_records:
+            for recorded in _unique_provenance(version_records):
+                try:
+                    _validate_provenance_identity(recorded, current)
+                except ValueError:
+                    _validate_inherited_provenance(recorded, current)
+            return version
     if current["kind"] == "release" or ENV_OVERRIDE in os.environ:
         return label
-    version = current["crate_version"]
     tag = f"dynamo-parsers-v2-v{version}"
     if _git(repo_root, "tag", "--list", tag).strip():
         return label
@@ -239,6 +264,58 @@ def select_capture_label(repo_root: Path, captures: dict) -> str:
 
 def _unique_provenance(records: list):
     return {json.dumps(record, sort_keys=True): record for record in records}.values()
+
+
+def _version_key(version: str) -> tuple:
+    release, separator, prerelease = version.partition("-")
+    numeric = tuple(int(part) for part in release.split("."))
+    return numeric, 0 if separator else 1, prerelease
+
+
+def _validate_inherited_provenance(recorded: dict, current: dict) -> None:
+    if not isinstance(recorded, dict):
+        raise ValueError("capture feed has no producer source identity; recapture it")
+    crate_version = recorded.get("crate_version")
+    source_sha256 = recorded.get("source_sha256")
+    source_id = recorded.get("source_id")
+    label = recorded.get("label")
+    kind = recorded.get("kind")
+    if (
+        not isinstance(crate_version, str)
+        or not DYNAMO_VERSION_RE.fullmatch(crate_version)
+        or _version_key(crate_version) > _version_key(current["crate_version"])
+        or not isinstance(source_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", source_sha256)
+        or source_id != f"sha256:{source_sha256}"
+        or recorded.get("source_paths") != list(SOURCE_PATHS)
+    ):
+        raise ValueError("capture feed source identity differs from the selected release view")
+    if kind == "unpublished":
+        valid_label = label == f"{crate_version}+source.{source_sha256}"
+        valid_release = (
+            recorded.get("release_tag") is None
+            and recorded.get("release_commit") is None
+        )
+    elif kind == "release":
+        valid_label = label == crate_version
+        valid_release = (
+            recorded.get("release_tag") == f"dynamo-parsers-v2-v{crate_version}"
+            and isinstance(recorded.get("release_commit"), str)
+            and re.fullmatch(r"[0-9a-f]{40,64}", recorded["release_commit"])
+        )
+    else:
+        valid_label = valid_release = False
+    commit = recorded.get("git_commit")
+    tree = recorded.get("git_head_tree")
+    if (
+        not valid_label
+        or not valid_release
+        or not isinstance(commit, str)
+        or not re.fullmatch(r"[0-9a-f]{40,64}", commit)
+        or not isinstance(tree, str)
+        or not re.fullmatch(r"[0-9a-f]{40,64}", tree)
+    ):
+        raise ValueError("capture feed source identity differs from the selected release view")
 
 
 def validate_capture_provenance(repo_root: Path, recorded: dict) -> dict:

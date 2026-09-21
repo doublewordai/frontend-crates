@@ -2256,8 +2256,8 @@ def _load_unified_fixtures(base: Path):
             input_bindings[name] = capture_stimulus.read_bindings(base / name)
         snapshot_path = base / name / fixture_disposition.CAPTURE_SNAPSHOT
         if is_capture and snapshot_path.is_file():
-            if not name.startswith("dynamo_v2-") or "+source." not in name:
-                raise ValueError(f"complete capture snapshot requires a source-qualified Dynamo capture: {name}")
+            if not name.startswith("dynamo_v2-"):
+                raise ValueError(f"complete capture snapshot requires a Dynamo capture: {name}")
             available = [str(path.relative_to(base / name)) for path in (base / name).glob("*/*.yaml")]
             fixture_disposition.capture_snapshot_members(snapshot_path.read_bytes(), available)
             complete_snapshots.add(name)
@@ -2404,7 +2404,23 @@ def _load_unified_fixtures(base: Path):
             dynamo_by_ver[display_ver] = captured_cases
 
     current_dynamo_ver = _unified_dynamo_label(capture_provenance)
-    current_dynamo_cases = dynamo_by_ver.get(current_dynamo_ver, {})
+    target_release = fixtures._version_sort_key(_base_stream_version(current_dynamo_ver))
+    inherited_current_cases = {}
+    for version in sorted(
+        (
+            version
+            for version in dynamo_by_ver
+            if fixtures._version_sort_key(_base_stream_version(version)) <= target_release
+        ),
+        key=lambda version: (
+            fixtures._version_sort_key(_base_stream_version(version)),
+            fixture_disposition.capture_layer_sort_key(version),
+        ),
+    ):
+        inherited_current_cases.update(dynamo_by_ver[version])
+    inherited_current_cases.update(dynamo_by_ver.get(current_dynamo_ver, {}))
+    dynamo_by_ver[current_dynamo_ver] = inherited_current_cases
+    current_dynamo_cases = inherited_current_cases
     missing_current_case_keys = {
         (family, key)
         for (family, key), input_case in inputs.items()

@@ -1,8 +1,8 @@
 schema_version: 2
-family: kimi_k2
+family: qwen3
 implementation: dynamo_v2
 parent: dynamo_v2-0.6.0
-runtime_version: 0.6.0+source.06847bad0fee2c369c44d7fef7a16ac976af4e1ea606882fcc3cbe5a3a402518
+runtime_version: 0.6.0.patch1
 provenance:
   status: captured
   record:
@@ -55,10 +55,8 @@ changes:
         - kind: tool_call
           name: run
           arguments:
-            cmd: git log <|tool_call_end|> --oneline
+            cmd: git log </tool_call> --oneline
         chunks:
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -67,8 +65,30 @@ changes:
         - expected:
           - kind: tool_call
             name: run
-            arguments: '{"cmd":"git log <|tool_call_end|> --oneline"}'
+            arguments: '{"cmd":"git log'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: ' </tool_call>'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: ' --oneline'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   arg_unicode:
@@ -91,8 +111,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"São Paulo 東京"}'
+            arguments: '{"city":"São Paulo 東京'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   content_then_reason:
@@ -153,8 +185,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Paris"}'
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   empty_args:
@@ -172,12 +216,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   guided_json_after_reasoning:
@@ -426,8 +470,6 @@ changes:
         - expected:
           - kind: reasoning
             text: 'I''ll call '
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: get_weather
@@ -445,6 +487,10 @@ changes:
       value:
         assembled: []
         chunks:
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -626,7 +672,6 @@ changes:
         - kind: text
           text: '[{"name": "get_weather", "arguments": {"city": "Paris"}}, {"arguments": {}}]'
         chunks:
-        - expected: []
         - expected:
           - kind: text
             text: '[{"name": "get_weather", "arguments": {"city": "Paris"}}, {"arguments": {}}]'
@@ -672,7 +717,6 @@ changes:
         - kind: text
           text: '{"unexpected": "shape"}'
         chunks:
-        - expected: []
         - expected:
           - kind: text
             text: '{"unexpected": "shape"}'
@@ -723,18 +767,16 @@ changes:
             city: Paris
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: secret
+        - expected: []
+        - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city": "Paris"}'
             complete: true
+        - expected: []
   guided_json_tool_close_after_payload:
     case_key: UNIFIED.31-6
     stimulus:
@@ -877,8 +919,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Paris"}'
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   narrated_calls:
@@ -913,8 +967,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Paris"}'
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected:
           - kind: text
@@ -927,8 +993,20 @@ changes:
         - expected:
           - kind: tool_call
             name: f
-            arguments: '{"x":"1"}'
+            arguments: '{"x":"1'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected:
           - kind: text
@@ -941,8 +1019,20 @@ changes:
         - expected:
           - kind: tool_call
             name: g
-            arguments: '{"y":"2"}'
+            arguments: '{"y":"2'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   orphan_close_after_prose:
@@ -987,8 +1077,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"London"}'
+            arguments: '{"city":"London'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   prefilled_reasoning_then_text:
@@ -1042,8 +1144,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Paris"}'
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   prefilled_reasoning_truncated:
@@ -1065,6 +1179,11 @@ changes:
         - expected: []
         - expected: []
         - expected: []
+        - expected:
+          - kind: tool_call
+            name: get_weather
+            arguments: '{"city":"Par'
+            complete: false
         - expected: []
   prefilled_reasoning_with_guided_json:
     case_key: UNIFIED.40.b
@@ -1116,8 +1235,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Paris"}'
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   prefilled_response_reasoning_markers_literal:
@@ -1154,8 +1285,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Paris"}'
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   reason_after_tool:
@@ -1189,8 +1332,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Paris"}'
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
         - expected:
@@ -1227,8 +1382,20 @@ changes:
         - expected:
           - kind: tool_call
             name: f
-            arguments: '{"x":"1"}'
+            arguments: '{"x":"1'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
         - expected:
@@ -1243,8 +1410,20 @@ changes:
         - expected:
           - kind: tool_call
             name: g
-            arguments: '{"y":"2"}'
+            arguments: '{"y":"2'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   reason_interleaved:
@@ -1280,8 +1459,20 @@ changes:
         - expected:
           - kind: tool_call
             name: f
-            arguments: '{"x":"1"}'
+            arguments: '{"x":"1'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
         - expected:
@@ -1296,8 +1487,20 @@ changes:
         - expected:
           - kind: tool_call
             name: g
-            arguments: '{"y":"2"}'
+            arguments: '{"y":"2'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   reason_markup_in_arg:
@@ -1318,14 +1521,34 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: log
-            arguments: '{"note":"<think>reconsider</think>"}'
+            arguments: '{"note":"<think>'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: reconsider
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: </think>
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   reason_markup_in_arg_with_text:
@@ -1353,14 +1576,34 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: log
-            arguments: '{"note":"<think>reconsider</think>"}'
+            arguments: '{"note":"<think>'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: reconsider
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: </think>
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected:
           - kind: text
@@ -1430,8 +1673,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Paris"}'
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   reason_tool_reason_tool_reason:
@@ -1469,8 +1724,20 @@ changes:
         - expected:
           - kind: tool_call
             name: f
-            arguments: '{"x":"1"}'
+            arguments: '{"x":"1'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
         - expected:
@@ -1485,8 +1752,20 @@ changes:
         - expected:
           - kind: tool_call
             name: g
-            arguments: '{"y":"2"}'
+            arguments: '{"y":"2'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
         - expected:
@@ -1529,8 +1808,20 @@ changes:
         - expected:
           - kind: tool_call
             name: f
-            arguments: '{"x":"1"}'
+            arguments: '{"x":"1'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected:
           - kind: text
@@ -1548,8 +1839,20 @@ changes:
         - expected:
           - kind: tool_call
             name: g
-            arguments: '{"y":"2"}'
+            arguments: '{"y":"2'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   reason_unterminated:
@@ -1567,11 +1870,19 @@ changes:
           - kind: reasoning
             text: thinking but stream ends
         - expected: []
-  retired__1_2:
-    absent: true
   retired__30_14:
     absent: true
+  retired__31_31:
+    absent: true
+  retired__31_32:
+    absent: true
   retired__31_33:
+    absent: true
+  retired__31_34:
+    absent: true
+  retired__31_35:
+    absent: true
+  retired__31_36:
     absent: true
   retired__31_40:
     absent: true
@@ -1602,8 +1913,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Paris"}'
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   text_between_calls:
@@ -1632,8 +1955,20 @@ changes:
         - expected:
           - kind: tool_call
             name: f
-            arguments: '{"x":"1"}'
+            arguments: '{"x":"1'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected:
           - kind: text
@@ -1646,8 +1981,20 @@ changes:
         - expected:
           - kind: tool_call
             name: g
-            arguments: '{"y":"2"}'
+            arguments: '{"y":"2'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   text_only:
@@ -1704,8 +2051,20 @@ changes:
         - expected:
           - kind: tool_call
             name: f
-            arguments: '{"x":"1"}'
+            arguments: '{"x":"1'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected:
           - kind: text
@@ -1723,8 +2082,20 @@ changes:
         - expected:
           - kind: tool_call
             name: g
-            arguments: '{"y":"2"}'
+            arguments: '{"y":"2'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   text_sandwich:
@@ -1754,8 +2125,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Paris"}'
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected:
           - kind: text
@@ -1800,8 +2183,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Paris"}'
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected:
           - kind: reasoning
@@ -1843,8 +2238,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Paris"}'
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected:
           - kind: reasoning
@@ -1863,6 +2270,40 @@ changes:
         assembled: []
         chunks:
         - expected: []
+        - expected: []
+  tool_no_close:
+    case_key: UNIFIED.5.b
+    stimulus:
+      ref: current
+    observation:
+      value:
+        assembled:
+        - kind: tool_call
+          name: get_weather
+          arguments:
+            city: Paris
+        chunks:
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: get_weather
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
+            complete: true
         - expected: []
   tool_only:
     case_key: UNIFIED.1.a
@@ -1884,8 +2325,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Paris"}'
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   trailing_text_after_tool:
@@ -1910,8 +2363,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Paris"}'
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected:
           - kind: text
@@ -1937,6 +2402,11 @@ changes:
         - expected: []
         - expected: []
         - expected: []
+        - expected:
+          - kind: tool_call
+            name: get_weather
+            arguments: '{"city":"Par'
+            complete: false
         - expected: []
   two_adjacent_reason_spans:
     case_key: UNIFIED.10.e
@@ -1992,8 +2462,20 @@ changes:
         - expected:
           - kind: tool_call
             name: f
-            arguments: '{"x":"1"}'
+            arguments: '{"x":"1'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2003,8 +2485,20 @@ changes:
         - expected:
           - kind: tool_call
             name: g
-            arguments: '{"y":"2"}'
+            arguments: '{"y":"2'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   two_calls_same_name:
@@ -2031,8 +2525,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Paris"}'
+            arguments: '{"city":"Paris'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2042,8 +2548,20 @@ changes:
         - expected:
           - kind: tool_call
             name: get_weather
-            arguments: '{"city":"Tokyo"}'
+            arguments: '{"city":"Tokyo'
+            complete: false
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '"'
+            complete: false
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: null
+            arguments: '}'
             complete: true
+        - expected: []
         - expected: []
         - expected: []
   two_reason_spans:

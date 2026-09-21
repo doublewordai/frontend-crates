@@ -13,7 +13,7 @@ Source (loose build tree, conformance/unified/):
 Output (conformance/unified/, one YAML per case per family per version-dir):
   inputs/<family>/UNIFIED.<scenario>.yaml         {description, policy, chunks:[{delta_text}]}
   golden/<family>/UNIFIED.<scenario>.yaml         {captured_with:{golden}, assembled}
-  dynamo_v2-<ver>/<family>/UNIFIED.<scenario>.yaml {captured_with, assembled, chunks:[{expected}]}
+  dynamo_v2-<ver>/<family>/UNIFIED.<scenario>.yaml {captured_with, capture_provenance, assembled, chunks:[{expected}]}
   vllm_python-<ver>/<family>/...
   vllm_rust-<ver>/<family>/...
   sglang_python-<ver>/<family>/...
@@ -31,6 +31,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dynamo_version import validate_capture_provenance  # noqa: E402
 from capture_stimulus import capture_input  # noqa: E402
+import unified_history  # noqa: E402
 from unified_taxonomy import numbered_id  # noqa: E402
 
 CONF = Path(__file__).resolve().parents[2]   # <repo>/conformance
@@ -92,6 +93,48 @@ def _shared_overlay_dirs():
     return overlays
 
 
+def _normalized_dynamo_capture_suffix(provenance):
+    """Choose the version-only history layer for this producer identity."""
+    history_root = REPO / "conformance" / "fixtures-unified-v2"
+    if not history_root.is_dir():
+        return provenance["crate_version"]
+
+    store = unified_history.load_store(history_root)
+    crate_version = provenance["crate_version"]
+    source_sha256 = provenance.get("source_sha256")
+    matches = set()
+    release_layers = set()
+    for (family, implementation), history in store.histories.items():
+        if implementation != "dynamo_v2":
+            continue
+        for capture_id, capture in history.captures.items():
+            runtime_version = capture["runtime_version"].split("+source.", 1)[0]
+            if runtime_version != crate_version and not runtime_version.startswith(
+                f"{crate_version}.patch"
+            ):
+                continue
+            suffix = capture_id.removeprefix("dynamo_v2-")
+            match = re.fullmatch(rf"{re.escape(crate_version)}(?:\.patch(\d+))?", suffix)
+            if match is None:
+                continue
+            release_layers.add((suffix, int(match.group(1) or 0)))
+            record = (capture.get("provenance") or {}).get("record") or {}
+            if record.get("source_sha256") == source_sha256:
+                matches.add(suffix)
+
+    if len(matches) > 1:
+        raise ValueError(
+            f"multiple normalized Dynamo capture layers match source {source_sha256}: "
+            f"{sorted(matches)}"
+        )
+    if matches:
+        return next(iter(matches))
+    if release_layers:
+        next_patch = max(patch for _suffix, patch in release_layers) + 1
+        return f"{crate_version}.patch{next_patch}"
+    return crate_version
+
+
 def main():
     feed = yaml.safe_load((BUILD / "unified_results.yaml").read_text())
     provenance = validate_capture_provenance(REPO, feed.get("capture_provenance"))
@@ -108,7 +151,9 @@ def main():
         "vllm_python": caps["vllm_python"].get("vllm_version") or "0.25.x",
         "vllm_rust": caps["vllm_rust"].get("vllm_rust_version") or "0.25.x",
         "sglang_python": caps["sglang_python"].get("sglang_version") or "0.5.x",
-        "dynamo_v2": provenance["label"],
+        # The directory uses the normalized history layer for this producer.
+        # The complete producer identity remains in each document.
+        "dynamo_v2": _normalized_dynamo_capture_suffix(provenance),
     }
     shared_overlays = _shared_overlay_dirs()
 
@@ -157,7 +202,7 @@ def main():
 
         # dynamo_v2-<ver>/<family>/<key>.yaml — LIVE dynamo (assembled + per-chunk)
         ddir = f"dynamo_v2-{ver['dynamo_v2']}"
-        slot(ddir, fam, captured_with={"dynamo_v2": ver["dynamo_v2"]})[key] = {
+        slot(ddir, fam, captured_with={"dynamo_v2": provenance["crate_version"]})[key] = {
             "capture_input": capture_input(c),
             "assembled": c.get("dynamo") or [],
             "chunks": [{"expected": ch.get("dynamo") or []} for ch in chunks],

@@ -1,8 +1,8 @@
 schema_version: 2
-family: kimi_k3
+family: gemma4
 implementation: dynamo_v2
 parent: dynamo_v2-0.6.0
-runtime_version: 0.6.0+source.06847bad0fee2c369c44d7fef7a16ac976af4e1ea606882fcc3cbe5a3a402518
+runtime_version: 0.6.0.patch1
 provenance:
   status: captured
   record:
@@ -55,22 +55,8 @@ changes:
         - kind: tool_call
           name: run
           arguments:
-            cmd: git log <|close|>call<|sep|> --oneline
+            cmd: git log }<tool_call|> --oneline
         chunks:
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -82,7 +68,7 @@ changes:
         - expected:
           - kind: tool_call
             name: run
-            arguments: '{"cmd":"git log <|close|>call<|sep|> --oneline"}'
+            arguments: '{"cmd":"git log }<tool_call|> --oneline"}'
             complete: true
         - expected: []
   arg_unicode:
@@ -97,18 +83,6 @@ changes:
           arguments:
             city: São Paulo 東京
         chunks:
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -135,33 +109,17 @@ changes:
         - kind: text
           text: The capital is Paris.
         chunks:
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: 'Hello there. '
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected:
           - kind: reasoning
             text: let me recall
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: The capital is Paris.
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
   content_then_reason_then_tool:
     case_key: UNIFIED.11.f
@@ -179,35 +137,13 @@ changes:
           arguments:
             city: Paris
         chunks:
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: 'Sure, one sec. '
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: checking the forecast
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -234,19 +170,70 @@ changes:
         chunks:
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{}'
+            complete: true
+        - expected: []
+  gemma4_guided_json_malformed_call_prefix_before_reasoning:
+    case_key: UNIFIED.g4-2
+    stimulus:
+      ref: current
+    observation:
+      value:
+        assembled:
+        - kind: text
+          text: call:get_weather
+        - kind: reasoning
+          text: secret
+        - kind: tool_call
+          name: get_weather
+          arguments:
+            city: Paris
+        chunks:
+        - expected: []
+        - expected: []
+        - expected:
+          - kind: text
+            text: call:get_weather
+          - kind: reasoning
+            text: secret
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: get_weather
+            arguments: '{"city": "Paris"}'
+            complete: true
+        - expected: []
+  gemma4_guided_json_visible_call_prose_before_reasoning:
+    case_key: UNIFIED.g4-1
+    stimulus:
+      ref: current
+    observation:
+      value:
+        assembled:
+        - kind: text
+          text: 'I will call: you tomorrow'
+        - kind: reasoning
+          text: checking
+        - kind: tool_call
+          name: get_weather
+          arguments:
+            city: Paris
+        chunks:
+        - expected: []
+        - expected: []
+        - expected:
+          - kind: text
+            text: 'I will call: you tomorrow'
+          - kind: reasoning
+            text: checking
+        - expected: []
+        - expected:
+          - kind: tool_call
+            name: get_weather
+            arguments: '{"city": "Paris"}'
             complete: true
         - expected: []
   guided_json_after_reasoning:
@@ -264,13 +251,9 @@ changes:
             city: Paris
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: checking
-        - expected: []
-        - expected: []
         - expected: []
         - expected:
           - kind: tool_call
@@ -317,15 +300,11 @@ changes:
           - kind: reasoning
             text: 'thinking '
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city": "Paris"}'
             complete: true
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
   guided_json_escaped_string_args:
@@ -358,7 +337,6 @@ changes:
           arguments:
             city: a > b
         chunks:
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
@@ -384,8 +362,6 @@ changes:
             complete: true
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
   guided_json_gt_in_argument_wrapped:
     case_key: UNIFIED.30.l
     stimulus:
@@ -399,15 +375,11 @@ changes:
             city: a > b
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city": "a > b"}'
             complete: true
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
   guided_json_invalid_call:
@@ -434,16 +406,14 @@ changes:
         - kind: tool_call
           name: log
           arguments:
-            note: <|close|>think<|sep|>
+            note: <channel|>
         chunks:
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected:
           - kind: tool_call
             name: log
-            arguments: '{"note": "<|close|>think<|sep|>"}'
+            arguments: '{"note": "<channel|>"}'
             complete: true
         - expected: []
   guided_json_named_tool:
@@ -479,19 +449,13 @@ changes:
             city: Paris
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: 'I''ll use '
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: ' next'
-        - expected: []
-        - expected: []
         - expected: []
         - expected:
           - kind: tool_call
@@ -514,15 +478,9 @@ changes:
             city: Paris
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: 'I''ll call '
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: get_weather
@@ -548,18 +506,6 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
   guided_json_orphan_reason_close_before_payload:
     case_key: UNIFIED.31-10
     stimulus:
@@ -572,8 +518,6 @@ changes:
           arguments:
             city: Paris
         chunks:
-        - expected: []
-        - expected: []
         - expected: []
         - expected:
           - kind: tool_call
@@ -593,8 +537,6 @@ changes:
           arguments:
             city: Paris
         chunks:
-        - expected: []
-        - expected: []
         - expected: []
         - expected:
           - kind: tool_call
@@ -634,21 +576,50 @@ changes:
         chunks:
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: 'Sure. '
-        - expected:
           - kind: reasoning
             text: checking
-        - expected: []
-        - expected: []
         - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city": "Paris"}'
             complete: true
+        - expected: []
+  guided_json_quoted_bare_header_after_payload:
+    case_key: UNIFIED.31-27
+    stimulus:
+      ref: current
+    observation:
+      value:
+        assembled:
+        - kind: tool_call
+          name: get_weather
+          arguments:
+            city: Paris
+        - kind: text
+          text: 'I mean <|channel>thought
+
+            self literal<channel|>'
+        chunks:
+        - expected:
+          - kind: tool_call
+            name: get_weather
+            arguments: '{"city": "Paris"}'
+            complete: true
+          - kind: text
+            text: 'I mean '
+        - expected: []
+        - expected:
+          - kind: text
+            text: '<|channel>thought
+
+              self literal'
+        - expected:
+          - kind: text
+            text: <channel|>
         - expected: []
   guided_json_quoted_bare_header_in_answer:
     case_key: UNIFIED.31-25
@@ -658,7 +629,9 @@ changes:
       value:
         assembled:
         - kind: text
-          text: I mean <|open|>think<|sep|>self literal<|close|>think<|sep|>
+          text: 'I mean <|channel>thought
+
+            self literal<channel|>'
         - kind: tool_call
           name: get_weather
           arguments:
@@ -667,27 +640,15 @@ changes:
         - expected:
           - kind: text
             text: 'I mean '
+        - expected: []
         - expected:
           - kind: text
-            text: <|open|>
+            text: '<|channel>thought
+
+              self literal'
         - expected:
           - kind: text
-            text: think
-        - expected:
-          - kind: text
-            text: <|sep|>
-        - expected:
-          - kind: text
-            text: self literal
-        - expected:
-          - kind: text
-            text: <|close|>
-        - expected:
-          - kind: text
-            text: think
-        - expected:
-          - kind: text
-            text: <|sep|>
+            text: <channel|>
         - expected:
           - kind: tool_call
             name: get_weather
@@ -722,7 +683,6 @@ changes:
         - kind: text
           text: '[{"name": "get_weather", "arguments": {"city": "Paris"}}, {"arguments": {}}]'
         chunks:
-        - expected: []
         - expected:
           - kind: text
             text: '[{"name": "get_weather", "arguments": {"city": "Paris"}}, {"arguments": {}}]'
@@ -742,8 +702,6 @@ changes:
             text: '[{"name": "get_weather", "arguments": {"city": "Paris"}}, {"arguments": {}}]'
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
   guided_json_schema_error_nameless_element_wrapped:
     case_key: UNIFIED.31-19
     stimulus:
@@ -755,13 +713,9 @@ changes:
           text: '[{"name": "get_weather", "arguments": {"city": "Paris"}}, {"arguments": {}}]'
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: '[{"name": "get_weather", "arguments": {"city": "Paris"}}, {"arguments": {}}]'
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
   guided_json_schema_error_not_a_call_bare_opener:
@@ -774,7 +728,6 @@ changes:
         - kind: text
           text: '{"unexpected": "shape"}'
         chunks:
-        - expected: []
         - expected:
           - kind: text
             text: '{"unexpected": "shape"}'
@@ -794,8 +747,6 @@ changes:
             text: '{"unexpected": "shape"}'
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
   guided_json_schema_error_not_a_call_wrapped:
     case_key: UNIFIED.31-16
     stimulus:
@@ -807,13 +758,9 @@ changes:
           text: '{"unexpected": "shape"}'
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: '{"unexpected": "shape"}'
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
   guided_json_stray_prefix_before_reasoning:
@@ -832,14 +779,9 @@ changes:
         chunks:
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: secret
-        - expected: []
-        - expected: []
         - expected: []
         - expected:
           - kind: tool_call
@@ -866,8 +808,6 @@ changes:
             complete: true
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
   guided_json_tool_open_before_payload:
     case_key: UNIFIED.31-5
     stimulus:
@@ -880,8 +820,6 @@ changes:
           arguments:
             city: Paris
         chunks:
-        - expected: []
-        - expected: []
         - expected: []
         - expected:
           - kind: tool_call
@@ -930,21 +868,15 @@ changes:
             city: Paris
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: thinking
-        - expected: []
-        - expected: []
         - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city": "Paris"}'
             complete: true
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
   guided_json_wrapped_in_tool_markup:
@@ -960,15 +892,11 @@ changes:
             city: Paris
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city": "Paris"}'
             complete: true
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
   interstitial_text:
@@ -988,16 +916,9 @@ changes:
             city: Paris
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: a
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected:
           - kind: text
@@ -1008,345 +929,10 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
-            complete: true
-        - expected: []
-  kimi_k3_elided_think_close_to_response:
-    case_key: UNIFIED.k3-5
-    stimulus:
-      ref: current
-    observation:
-      value:
-        assembled:
-        - kind: reasoning
-          text: checking
-        - kind: text
-          text: The answer is 42.
-        chunks:
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected:
-          - kind: reasoning
-            text: checking
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected:
-          - kind: text
-            text: The answer is 42.
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-  kimi_k3_guided_native_wrapper:
-    case_key: UNIFIED.k3-8
-    stimulus:
-      ref: current
-    observation:
-      value:
-        assembled:
-        - kind: tool_call
-          name: get_weather
-          arguments:
-            city: Paris
-        chunks:
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected:
-          - kind: tool_call
-            name: get_weather
-            arguments: '{"city": "Paris"}'
-            complete: true
-        - expected: []
-  kimi_k3_malformed_call_then_valid:
-    case_key: UNIFIED.k3-6
-    stimulus:
-      ref: current
-    observation:
-      value:
-        assembled:
-        - kind: tool_call
-          name: g
-          arguments:
-            y: '2'
-        chunks:
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected:
-          - kind: tool_call
-            name: g
-            arguments: '{"y":"2"}'
-            complete: true
-        - expected: []
-  kimi_k3_message_end_after_response:
-    case_key: UNIFIED.k3-4
-    stimulus:
-      ref: current
-    observation:
-      value:
-        assembled:
-        - kind: text
-          text: done
-        chunks:
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected:
-          - kind: text
-            text: done
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-  kimi_k3_raw_json_arguments:
-    case_key: UNIFIED.k3-2
-    stimulus:
-      ref: current
-    observation:
-      value:
-        assembled:
-        - kind: tool_call
-          name: run
-          arguments:
-            cmd: literal <|close|>call<|sep|>
-            options:
-              retries: 2
-        chunks:
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected:
-          - kind: tool_call
-            name: run
-            arguments: '{"cmd":"literal <|close|>call<|sep|>","options":{"retries":2}}'
-            complete: true
-        - expected: []
-  kimi_k3_raw_json_eof:
-    case_key: UNIFIED.k3-7
-    stimulus:
-      ref: current
-    observation:
-      value:
-        assembled: []
-        chunks:
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-  kimi_k3_spaced_xtml_markers:
-    case_key: UNIFIED.k3-3
-    stimulus:
-      ref: current
-    observation:
-      value:
-        assembled:
-        - kind: text
-          text: 'Checking. '
-        - kind: tool_call
-          name: get_weather
-          arguments:
-            city: Paris
-        chunks:
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected:
-          - kind: text
-            text: 'Checking. '
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected:
-          - kind: tool_call
-            name: get_weather
-            arguments: '{"city":"Paris"}'
-            complete: true
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-  kimi_k3_typed_argument_values:
-    case_key: UNIFIED.k3-1
-    stimulus:
-      ref: current
-    observation:
-      value:
-        assembled:
-        - kind: tool_call
-          name: run
-          arguments:
-            cmd: echo ok
-            count: 2
-            force: true
-            options:
-              cwd: /tmp
-            tags:
-            - a
-            - b
-            note: null
-        chunks:
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected:
-          - kind: tool_call
-            name: run
-            arguments: '{"cmd":"echo ok","count":2,"force":true,"options":{"cwd":"/tmp"},"tags":["a","b"],"note":null}'
             complete: true
         - expected: []
   narrated_calls:
@@ -1379,44 +965,14 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: ' then I''ll run '
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -1428,27 +984,9 @@ changes:
             name: f
             arguments: '{"x":"1"}'
             complete: true
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: ' and '
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -1476,8 +1014,6 @@ changes:
             text: 'I will check that. '
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
   prefilled_reasoning_redundant_opener:
     case_key: UNIFIED.41.a
     stimulus:
@@ -1493,25 +1029,9 @@ changes:
             city: London
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: checking weather
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -1541,17 +1061,9 @@ changes:
           - kind: reasoning
             text: no tool needed
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: The answer is 42.
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
   prefilled_reasoning_then_text_then_tool:
     case_key: UNIFIED.40.c
@@ -1573,29 +1085,9 @@ changes:
           - kind: reasoning
             text: weighing options
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: 'Here''s what I found: '
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -1627,14 +1119,6 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
   prefilled_reasoning_with_guided_json:
     case_key: UNIFIED.40.b
     stimulus:
@@ -1652,8 +1136,6 @@ changes:
         - expected:
           - kind: reasoning
             text: checking weather
-        - expected: []
-        - expected: []
         - expected: []
         - expected:
           - kind: tool_call
@@ -1685,20 +1167,6 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
@@ -1713,45 +1181,31 @@ changes:
       value:
         assembled:
         - kind: text
-          text: <|open|>think<|sep|>literal<|close|>think<|sep|> then a call
+          text: '<|channel>thought
+
+            literal<channel|> then a call'
         - kind: tool_call
           name: get_weather
           arguments:
             city: Paris
         chunks:
-        - expected: []
         - expected:
           - kind: text
-            text: <|open|>think
+            text: <|channel>
         - expected:
           - kind: text
-            text: <|sep|>
+            text: 'thought
+
+              literal'
         - expected:
           - kind: text
-            text: literal
-        - expected: []
+            text: <channel|>
         - expected:
           - kind: text
-            text: <|close|>think
+            text: ' then a '
         - expected:
           - kind: text
-            text: <|sep|>
-        - expected:
-          - kind: text
-            text: ' then a call'
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
+            text: call
         - expected: []
         - expected: []
         - expected: []
@@ -1782,25 +1236,9 @@ changes:
           text: It's 18C.
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: Look it up.
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -1814,23 +1252,13 @@ changes:
             arguments: '{"city":"Paris"}'
             complete: true
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: Now answer.
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: It's 18C.
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
   reason_between_calls:
     case_key: UNIFIED.11.i
@@ -1856,43 +1284,15 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: f
             arguments: '{"x":"1"}'
             complete: true
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: mid
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -1927,25 +1327,9 @@ changes:
             y: '2'
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: A
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -1959,25 +1343,9 @@ changes:
             arguments: '{"x":"1"}'
             complete: true
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: B
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2001,24 +1369,10 @@ changes:
         - kind: tool_call
           name: log
           arguments:
-            note: <|open|>think<|sep|>reconsider<|close|>think<|sep|>
+            note: '<|channel>thought
+
+              reconsider<channel|>'
         chunks:
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2030,7 +1384,7 @@ changes:
         - expected:
           - kind: tool_call
             name: log
-            arguments: '{"note":"<|open|>think<|sep|>reconsider<|close|>think<|sep|>"}'
+            arguments: '{"note":"<|channel>thought\nreconsider<channel|>"}'
             complete: true
         - expected: []
   reason_markup_in_arg_with_text:
@@ -2045,13 +1399,12 @@ changes:
         - kind: tool_call
           name: log
           arguments:
-            note: <|open|>think<|sep|>reconsider<|close|>think<|sep|>
+            note: '<|channel>thought
+
+              reconsider<channel|>'
         - kind: text
           text: ' done.'
         chunks:
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: 'Logging now: '
@@ -2063,39 +1416,14 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: log
-            arguments: '{"note":"<|open|>think<|sep|>reconsider<|close|>think<|sep|>"}'
+            arguments: '{"note":"<|channel>thought\nreconsider<channel|>"}'
             complete: true
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: ' done.'
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
   reason_only:
     case_key: UNIFIED.10.a
@@ -2108,13 +1436,9 @@ changes:
           text: just thinking, no answer
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: just thinking, no answer
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
   reason_then_content:
@@ -2130,23 +1454,13 @@ changes:
           text: The answer is 42.
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: let me think
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: The answer is 42.
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
   reason_then_tool:
     case_key: UNIFIED.11.a
@@ -2163,25 +1477,9 @@ changes:
             city: Paris
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: Check weather.
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2218,25 +1516,9 @@ changes:
           text: C
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: A
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2250,25 +1532,9 @@ changes:
             arguments: '{"x":"1"}'
             complete: true
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: B
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2282,13 +1548,9 @@ changes:
             arguments: '{"y":"2"}'
             complete: true
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: C
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
   reason_tool_text_reason_tool:
@@ -2314,25 +1576,9 @@ changes:
             y: '2'
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: A
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2345,35 +1591,13 @@ changes:
             name: f
             arguments: '{"x":"1"}'
             complete: true
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: working on it
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: B
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2398,8 +1622,6 @@ changes:
           text: thinking but stream ends
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: thinking but stream ends
@@ -2407,6 +1629,8 @@ changes:
   retired__30_14:
     absent: true
   retired__31_33:
+    absent: true
+  retired__31_39:
     absent: true
   retired__31_40:
     absent: true
@@ -2426,27 +1650,9 @@ changes:
           arguments:
             city: Paris
         chunks:
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: 'On it: '
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2483,44 +1689,14 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: f
             arguments: '{"x":"1"}'
             complete: true
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: ' then '
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2543,15 +1719,9 @@ changes:
         - kind: text
           text: The answer is 42, no tools needed.
         chunks:
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: The answer is 42, no tools needed.
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
   text_reason_tool_text_reason_tool:
     case_key: UNIFIED.11.j
@@ -2577,35 +1747,13 @@ changes:
           arguments:
             y: '2'
         chunks:
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: 'Sure. '
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: check A
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2618,35 +1766,13 @@ changes:
             name: f
             arguments: '{"x":"1"}'
             complete: true
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: ' and '
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: check B
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2676,27 +1802,9 @@ changes:
         - kind: text
           text: ' After.'
         chunks:
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: 'Before. '
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2708,15 +1816,9 @@ changes:
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: ' After.'
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
   tool_block_never_closed_then_text:
     case_key: UNIFIED.4.a
@@ -2726,8 +1828,6 @@ changes:
       value:
         assembled: []
         chunks:
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2748,23 +1848,9 @@ changes:
           text: ' now answer'
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: 'I should check. '
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2779,8 +1865,6 @@ changes:
         - expected:
           - kind: reasoning
             text: ' now answer'
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
   tool_in_reason_with_text:
@@ -2803,33 +1887,13 @@ changes:
         - kind: text
           text: ' Here you go.'
         chunks:
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: 'Sure. '
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: 'I should check. '
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2845,17 +1909,9 @@ changes:
           - kind: reasoning
             text: ' now answer'
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: ' Here you go.'
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
   tool_markup_only_emits_nothing:
     case_key: UNIFIED.4.b
@@ -2865,8 +1921,6 @@ changes:
       value:
         assembled: []
         chunks:
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
   tool_only:
@@ -2881,18 +1935,6 @@ changes:
           arguments:
             city: Paris
         chunks:
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2925,32 +1967,14 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: The forecast shows clear skies for the rest of the week.
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
   truncated_tool_eof:
     case_key: UNIFIED.5.a
@@ -2963,19 +1987,9 @@ changes:
           text: ok
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: ok
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2997,15 +2011,9 @@ changes:
           text: done
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: first
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected:
@@ -3014,17 +2022,9 @@ changes:
 
               second'
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: done
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
   two_calls:
     case_key: UNIFIED.2.a
@@ -3048,29 +2048,11 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: f
             arguments: '{"x":"1"}'
             complete: true
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -3105,29 +2087,11 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -3157,41 +2121,21 @@ changes:
           text: done
         chunks:
         - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: first thought
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
         - expected:
           - kind: text
             text: 'interlude '
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: reasoning
             text: second thought
         - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: done
-        - expected: []
-        - expected: []
-        - expected: []
         - expected: []
 metadata_changes:
   arg_marker_in_string: {}
@@ -3199,6 +2143,8 @@ metadata_changes:
   content_then_reason: {}
   content_then_reason_then_tool: {}
   empty_args: {}
+  gemma4_guided_json_malformed_call_prefix_before_reasoning: {}
+  gemma4_guided_json_visible_call_prose_before_reasoning: {}
   guided_json_after_reasoning: {}
   guided_json_array_argument: {}
   guided_json_bare_tool_header_recovers_inside_a_thought: {}
@@ -3237,14 +2183,6 @@ metadata_changes:
   guided_json_unterminated_reasoning_then_wrapped_payload: {}
   guided_json_wrapped_in_tool_markup: {}
   interstitial_text: {}
-  kimi_k3_elided_think_close_to_response: {}
-  kimi_k3_guided_native_wrapper: {}
-  kimi_k3_malformed_call_then_valid: {}
-  kimi_k3_message_end_after_response: {}
-  kimi_k3_raw_json_arguments: {}
-  kimi_k3_raw_json_eof: {}
-  kimi_k3_spaced_xtml_markers: {}
-  kimi_k3_typed_argument_values: {}
   narrated_calls: {}
   orphan_close_after_prose: {}
   prefilled_reasoning_redundant_opener: {}

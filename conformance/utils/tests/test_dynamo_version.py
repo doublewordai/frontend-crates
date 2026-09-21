@@ -277,6 +277,26 @@ def test_selected_current_rejects_wrong_provenance(release_repo, monkeypatch, ov
         identity.select_capture_label(release_repo, {recorded["label"]: [recorded, wrong]})
 
 
+def test_selected_current_accepts_valid_inherited_family_provenance(release_repo):
+    current = identity.dynamo_v2_provenance(release_repo)
+    digest = "0" * 64
+    inherited = {
+        **current,
+        "label": f"0.5.0+source.{digest}",
+        "kind": "unpublished",
+        "crate_version": "0.5.0",
+        "source_sha256": digest,
+        "source_id": f"sha256:{digest}",
+        "release_tag": None,
+        "release_commit": None,
+    }
+
+    assert identity.select_capture_label(
+        release_repo,
+        {current["label"]: [current, inherited]},
+    ) == current["label"]
+
+
 def test_selected_current_deduplicates_provenance_checks(release_repo, monkeypatch):
     recorded = identity.dynamo_v2_provenance(release_repo)
     fingerprint = identity.source_fingerprint
@@ -494,9 +514,10 @@ def test_explode_uses_producer_provenance_before_writes(release_repo, monkeypatc
         assert sorted(p.name for p in build.iterdir()) == ["unified_results.yaml"]
     else:
         explode.main()
-        doc = yaml.safe_load((build / f"dynamo_v2-{provenance['label']}/gemma4/UNIFIED.probe.yaml").read_text())
+        version_dir = provenance["crate_version"]
+        doc = yaml.safe_load((build / f"dynamo_v2-{version_dir}/gemma4/UNIFIED.probe.yaml").read_text())
         assert doc["capture_provenance"] == provenance
-        assert doc["captured_with"] == {"dynamo_v2": provenance["label"]}
+        assert doc["captured_with"] == {"dynamo_v2": version_dir}
 
 
 def test_missing_feed_provenance_is_rejected(release_repo):

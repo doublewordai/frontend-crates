@@ -34,7 +34,8 @@ def _write_case(root, dirname, family, key, body, **metadata):
     )
 
 
-def test_sparse_unified_patch_merges_with_base_and_overrides_in_order(tmp_path):
+def test_sparse_unified_patch_merges_with_base_and_overrides_in_order(tmp_path, monkeypatch):
+    monkeypatch.setattr(table, "_unified_dynamo_label", lambda _captures: "0.2.1")
     family = "gemma4"
     base_key = "UNIFIED.1-1"
     patch_key = "UNIFIED.1-2"
@@ -324,7 +325,7 @@ def test_selected_current_capture_requires_every_input_or_a_sparse_overlay(tmp_p
 
 @pytest.mark.parametrize("scenario", ["text_only", "tool_markup_only_emits_nothing"])
 @pytest.mark.parametrize("current_present", [False, True])
-def test_missing_current_capture_preserves_other_candidates(tmp_path, monkeypatch, scenario, current_present):
+def test_missing_current_capture_inherits_previous_candidate(tmp_path, monkeypatch, scenario, current_present):
     monkeypatch.setattr(table, "_unified_dynamo_label", lambda captures: "0.6.0")
     family = "qwen3"
     generator = table.gen_unified_golden
@@ -367,7 +368,7 @@ def test_missing_current_capture_preserves_other_candidates(tmp_path, monkeypatc
     popup = {candidate["key"]: candidate["block"] for candidate in cell["tooltip"]["candidates"]}
     assert set(cell["cmp"]) == set(popup) == set(candidates)
     for candidate, expected in {
-        "dynamo": "green" if current_present else "red",
+        "dynamo": "green",
         "dynamo@0.5.1": "green", "dynamo@0.4.0": "red", "dynamo@0.3.4": "empty",
         "vllm_python@0.26.0": "green", "vllm_rust@0.26.0": "red",
         "vllm": "red", "vllm_rust": "empty",
@@ -381,12 +382,7 @@ def test_missing_current_capture_preserves_other_candidates(tmp_path, monkeypatc
     chunks = cell["tooltip"]["input"]["chunks"]
     assert chunks[0]["expected"]["dynamo@0.5.1"] == golden
     assert chunks[0]["expected"]["vllm_rust@0.26.0"] == divergent
-    if current_present:
-        assert popup["dynamo"]["events"] == golden
-    else:
-        assert cell["status"] == "problem"
-        assert "Missing Unified capture" in popup["dynamo"]["error"]
-        assert cell["cmp"]["dynamo"]["sig"] != cell["cmp"]["golden"]["sig"]
+    assert popup["dynamo"]["events"] == golden
 
 
 @pytest.mark.parametrize("scenario, expected_state", [

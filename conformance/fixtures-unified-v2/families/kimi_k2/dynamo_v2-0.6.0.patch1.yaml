@@ -1,8 +1,8 @@
 schema_version: 2
-family: gemma4
+family: kimi_k2
 implementation: dynamo_v2
 parent: dynamo_v2-0.6.0
-runtime_version: 0.6.0+source.06847bad0fee2c369c44d7fef7a16ac976af4e1ea606882fcc3cbe5a3a402518
+runtime_version: 0.6.0.patch1
 provenance:
   status: captured
   record:
@@ -55,9 +55,8 @@ changes:
         - kind: tool_call
           name: run
           arguments:
-            cmd: git log }<tool_call|> --oneline
+            cmd: git log <|tool_call_end|> --oneline
         chunks:
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -68,8 +67,9 @@ changes:
         - expected:
           - kind: tool_call
             name: run
-            arguments: '{"cmd":"git log }<tool_call|> --oneline"}'
+            arguments: '{"cmd":"git log <|tool_call_end|> --oneline"}'
             complete: true
+        - expected: []
         - expected: []
   arg_unicode:
     case_key: UNIFIED.7.a
@@ -88,12 +88,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"São Paulo 東京"}'
             complete: true
+        - expected: []
         - expected: []
   content_then_reason:
     case_key: UNIFIED.11.g
@@ -150,12 +150,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
+        - expected: []
         - expected: []
   empty_args:
     case_key: UNIFIED.6.a
@@ -170,71 +170,15 @@ changes:
         chunks:
         - expected: []
         - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{}'
             complete: true
         - expected: []
-  gemma4_guided_json_malformed_call_prefix_before_reasoning:
-    case_key: UNIFIED.g4-2
-    stimulus:
-      ref: current
-    observation:
-      value:
-        assembled:
-        - kind: text
-          text: call:get_weather
-        - kind: reasoning
-          text: secret
-        - kind: tool_call
-          name: get_weather
-          arguments:
-            city: Paris
-        chunks:
-        - expected: []
-        - expected: []
-        - expected:
-          - kind: text
-            text: call:get_weather
-          - kind: reasoning
-            text: secret
-        - expected: []
-        - expected:
-          - kind: tool_call
-            name: get_weather
-            arguments: '{"city": "Paris"}'
-            complete: true
-        - expected: []
-  gemma4_guided_json_visible_call_prose_before_reasoning:
-    case_key: UNIFIED.g4-1
-    stimulus:
-      ref: current
-    observation:
-      value:
-        assembled:
-        - kind: text
-          text: 'I will call: you tomorrow'
-        - kind: reasoning
-          text: checking
-        - kind: tool_call
-          name: get_weather
-          arguments:
-            city: Paris
-        chunks:
-        - expected: []
-        - expected: []
-        - expected:
-          - kind: text
-            text: 'I will call: you tomorrow'
-          - kind: reasoning
-            text: checking
-        - expected: []
-        - expected:
-          - kind: tool_call
-            name: get_weather
-            arguments: '{"city": "Paris"}'
-            complete: true
         - expected: []
   guided_json_after_reasoning:
     case_key: UNIFIED.30.f
@@ -337,6 +281,7 @@ changes:
           arguments:
             city: a > b
         chunks:
+        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
@@ -406,14 +351,14 @@ changes:
         - kind: tool_call
           name: log
           arguments:
-            note: <channel|>
+            note: </think>
         chunks:
         - expected: []
         - expected: []
         - expected:
           - kind: tool_call
             name: log
-            arguments: '{"note": "<channel|>"}'
+            arguments: '{"note": "</think>"}'
             complete: true
         - expected: []
   guided_json_named_tool:
@@ -481,6 +426,8 @@ changes:
         - expected:
           - kind: reasoning
             text: 'I''ll call '
+        - expected: []
+        - expected: []
         - expected:
           - kind: reasoning
             text: get_weather
@@ -575,10 +522,10 @@ changes:
             city: Paris
         chunks:
         - expected: []
-        - expected: []
         - expected:
           - kind: text
             text: 'Sure. '
+        - expected:
           - kind: reasoning
             text: checking
         - expected: []
@@ -600,9 +547,7 @@ changes:
           arguments:
             city: Paris
         - kind: text
-          text: 'I mean <|channel>thought
-
-            self literal<channel|>'
+          text: I mean <think>self literal</think>
         chunks:
         - expected:
           - kind: tool_call
@@ -611,15 +556,15 @@ changes:
             complete: true
           - kind: text
             text: 'I mean '
-        - expected: []
         - expected:
           - kind: text
-            text: '<|channel>thought
-
-              self literal'
+            text: <think>
         - expected:
           - kind: text
-            text: <channel|>
+            text: self literal
+        - expected:
+          - kind: text
+            text: </think>
         - expected: []
   guided_json_quoted_bare_header_in_answer:
     case_key: UNIFIED.31-25
@@ -629,9 +574,7 @@ changes:
       value:
         assembled:
         - kind: text
-          text: 'I mean <|channel>thought
-
-            self literal<channel|>'
+          text: I mean <think>self literal</think>
         - kind: tool_call
           name: get_weather
           arguments:
@@ -640,15 +583,15 @@ changes:
         - expected:
           - kind: text
             text: 'I mean '
-        - expected: []
         - expected:
           - kind: text
-            text: '<|channel>thought
-
-              self literal'
+            text: <think>
         - expected:
           - kind: text
-            text: <channel|>
+            text: self literal
+        - expected:
+          - kind: text
+            text: </think>
         - expected:
           - kind: tool_call
             name: get_weather
@@ -683,6 +626,7 @@ changes:
         - kind: text
           text: '[{"name": "get_weather", "arguments": {"city": "Paris"}}, {"arguments": {}}]'
         chunks:
+        - expected: []
         - expected:
           - kind: text
             text: '[{"name": "get_weather", "arguments": {"city": "Paris"}}, {"arguments": {}}]'
@@ -728,6 +672,7 @@ changes:
         - kind: text
           text: '{"unexpected": "shape"}'
         chunks:
+        - expected: []
         - expected:
           - kind: text
             text: '{"unexpected": "shape"}'
@@ -779,16 +724,17 @@ changes:
         chunks:
         - expected: []
         - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
+        - expected: []
         - expected:
           - kind: reasoning
             text: secret
-        - expected: []
-        - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city": "Paris"}'
             complete: true
-        - expected: []
   guided_json_tool_close_after_payload:
     case_key: UNIFIED.31-6
     stimulus:
@@ -928,12 +874,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
+        - expected: []
         - expected: []
   narrated_calls:
     case_key: UNIFIED.8.e
@@ -964,16 +910,15 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
+        - expected: []
         - expected:
           - kind: text
             text: ' then I''ll run '
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -984,10 +929,10 @@ changes:
             name: f
             arguments: '{"x":"1"}'
             complete: true
+        - expected: []
         - expected:
           - kind: text
             text: ' and '
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -998,6 +943,7 @@ changes:
             name: g
             arguments: '{"y":"2"}'
             complete: true
+        - expected: []
         - expected: []
   orphan_close_after_prose:
     case_key: UNIFIED.5.c
@@ -1038,12 +984,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"London"}'
             complete: true
+        - expected: []
         - expected: []
   prefilled_reasoning_then_text:
     case_key: UNIFIED.40.d
@@ -1093,12 +1039,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
+        - expected: []
         - expected: []
   prefilled_reasoning_truncated:
     case_key: UNIFIED.41.b
@@ -1113,6 +1059,7 @@ changes:
         - expected:
           - kind: reasoning
             text: analyzing data
+        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -1166,12 +1113,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
+        - expected: []
         - expected: []
   prefilled_response_reasoning_markers_literal:
     case_key: UNIFIED.50.d
@@ -1181,9 +1128,7 @@ changes:
       value:
         assembled:
         - kind: text
-          text: '<|channel>thought
-
-            literal<channel|> then a call'
+          text: <think>literal</think> then a call
         - kind: tool_call
           name: get_weather
           arguments:
@@ -1191,21 +1136,16 @@ changes:
         chunks:
         - expected:
           - kind: text
-            text: <|channel>
+            text: <think>
         - expected:
           - kind: text
-            text: 'thought
-
-              literal'
+            text: literal
         - expected:
           - kind: text
-            text: <channel|>
+            text: </think>
         - expected:
           - kind: text
-            text: ' then a '
-        - expected:
-          - kind: text
-            text: call
+            text: ' then a call'
         - expected: []
         - expected: []
         - expected: []
@@ -1216,6 +1156,7 @@ changes:
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
+        - expected: []
         - expected: []
   reason_after_tool:
     case_key: UNIFIED.11.b
@@ -1245,12 +1186,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
+        - expected: []
         - expected: []
         - expected:
           - kind: reasoning
@@ -1283,17 +1224,16 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: f
             arguments: '{"x":"1"}'
             complete: true
         - expected: []
+        - expected: []
         - expected:
           - kind: reasoning
             text: mid
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -1305,6 +1245,7 @@ changes:
             name: g
             arguments: '{"y":"2"}'
             complete: true
+        - expected: []
         - expected: []
   reason_interleaved:
     case_key: UNIFIED.11.c
@@ -1336,17 +1277,16 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: f
             arguments: '{"x":"1"}'
             complete: true
         - expected: []
+        - expected: []
         - expected:
           - kind: reasoning
             text: B
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -1359,6 +1299,7 @@ changes:
             arguments: '{"y":"2"}'
             complete: true
         - expected: []
+        - expected: []
   reason_markup_in_arg:
     case_key: UNIFIED.12.a
     stimulus:
@@ -1369,10 +1310,9 @@ changes:
         - kind: tool_call
           name: log
           arguments:
-            note: '<|channel>thought
-
-              reconsider<channel|>'
+            note: <think>reconsider</think>
         chunks:
+        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -1384,8 +1324,9 @@ changes:
         - expected:
           - kind: tool_call
             name: log
-            arguments: '{"note":"<|channel>thought\nreconsider<channel|>"}'
+            arguments: '{"note":"<think>reconsider</think>"}'
             complete: true
+        - expected: []
         - expected: []
   reason_markup_in_arg_with_text:
     case_key: UNIFIED.12.c
@@ -1399,9 +1340,7 @@ changes:
         - kind: tool_call
           name: log
           arguments:
-            note: '<|channel>thought
-
-              reconsider<channel|>'
+            note: <think>reconsider</think>
         - kind: text
           text: ' done.'
         chunks:
@@ -1416,11 +1355,13 @@ changes:
         - expected: []
         - expected: []
         - expected: []
+        - expected: []
         - expected:
           - kind: tool_call
             name: log
-            arguments: '{"note":"<|channel>thought\nreconsider<channel|>"}'
+            arguments: '{"note":"<think>reconsider</think>"}'
             complete: true
+        - expected: []
         - expected:
           - kind: text
             text: ' done.'
@@ -1486,12 +1427,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
+        - expected: []
         - expected: []
   reason_tool_reason_tool_reason:
     case_key: UNIFIED.11.h
@@ -1525,17 +1466,16 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: f
             arguments: '{"x":"1"}'
             complete: true
         - expected: []
+        - expected: []
         - expected:
           - kind: reasoning
             text: B
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -1547,6 +1487,7 @@ changes:
             name: g
             arguments: '{"y":"2"}'
             complete: true
+        - expected: []
         - expected: []
         - expected:
           - kind: reasoning
@@ -1585,12 +1526,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: f
             arguments: '{"x":"1"}'
             complete: true
+        - expected: []
         - expected:
           - kind: text
             text: working on it
@@ -1604,12 +1545,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: g
             arguments: '{"y":"2"}'
             complete: true
+        - expected: []
         - expected: []
   reason_unterminated:
     case_key: UNIFIED.10.d
@@ -1626,11 +1567,11 @@ changes:
           - kind: reasoning
             text: thinking but stream ends
         - expected: []
+  retired__1_2:
+    absent: true
   retired__30_14:
     absent: true
   retired__31_33:
-    absent: true
-  retired__31_39:
     absent: true
   retired__31_40:
     absent: true
@@ -1658,12 +1599,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
+        - expected: []
         - expected: []
   text_between_calls:
     case_key: UNIFIED.8.d
@@ -1688,16 +1629,15 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: f
             arguments: '{"x":"1"}'
             complete: true
+        - expected: []
         - expected:
           - kind: text
             text: ' then '
-        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -1708,6 +1648,7 @@ changes:
             name: g
             arguments: '{"y":"2"}'
             complete: true
+        - expected: []
         - expected: []
   text_only:
     case_key: UNIFIED.3.a
@@ -1760,12 +1701,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: f
             arguments: '{"x":"1"}'
             complete: true
+        - expected: []
         - expected:
           - kind: text
             text: ' and '
@@ -1779,12 +1720,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: g
             arguments: '{"y":"2"}'
             complete: true
+        - expected: []
         - expected: []
   text_sandwich:
     case_key: UNIFIED.8.c
@@ -1810,12 +1751,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
+        - expected: []
         - expected:
           - kind: text
             text: ' After.'
@@ -1856,12 +1797,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
+        - expected: []
         - expected:
           - kind: reasoning
             text: ' now answer'
@@ -1899,12 +1840,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
+        - expected: []
         - expected:
           - kind: reasoning
             text: ' now answer'
@@ -1940,12 +1881,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
+        - expected: []
         - expected: []
   trailing_text_after_tool:
     case_key: UNIFIED.8.b
@@ -1966,12 +1907,12 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
             arguments: '{"city":"Paris"}'
             complete: true
+        - expected: []
         - expected:
           - kind: text
             text: The forecast shows clear skies for the rest of the week.
@@ -1990,6 +1931,7 @@ changes:
         - expected:
           - kind: reasoning
             text: ok
+        - expected: []
         - expected: []
         - expected: []
         - expected: []
@@ -2047,7 +1989,6 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: f
@@ -2064,6 +2005,7 @@ changes:
             name: g
             arguments: '{"y":"2"}'
             complete: true
+        - expected: []
         - expected: []
   two_calls_same_name:
     case_key: UNIFIED.2.b
@@ -2086,7 +2028,6 @@ changes:
         - expected: []
         - expected: []
         - expected: []
-        - expected: []
         - expected:
           - kind: tool_call
             name: get_weather
@@ -2103,6 +2044,7 @@ changes:
             name: get_weather
             arguments: '{"city":"Tokyo"}'
             complete: true
+        - expected: []
         - expected: []
   two_reason_spans:
     case_key: UNIFIED.10.c
@@ -2143,8 +2085,6 @@ metadata_changes:
   content_then_reason: {}
   content_then_reason_then_tool: {}
   empty_args: {}
-  gemma4_guided_json_malformed_call_prefix_before_reasoning: {}
-  gemma4_guided_json_visible_call_prose_before_reasoning: {}
   guided_json_after_reasoning: {}
   guided_json_array_argument: {}
   guided_json_bare_tool_header_recovers_inside_a_thought: {}
