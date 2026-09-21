@@ -1269,7 +1269,8 @@ def _snapshot_bytes(paths: list[str]) -> bytes:
     ).encode()
 
 
-def _materialized_record(case: dict, change: dict) -> tuple[dict, dict]:
+def materialized_record(case: dict, change: dict) -> tuple[dict, dict]:
+    """Return one history change in the loose-fixture record shape."""
     observation = change["observation"]
     state = next(iter(observation))
     if state == "value":
@@ -1375,7 +1376,7 @@ def materialize_store(
                 if capture_id == current_capture_id and case["lifecycle"] != "active":
                     continue
                 case_key = change["case_key"]
-                record, document_metadata = _materialized_record(case, change)
+                record, document_metadata = materialized_record(case, change)
                 document_metadata = dict(document_metadata)
                 record_metadata = document_metadata.pop("record_metadata", {})
                 record.update(record_metadata)

@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dynamo_version import validate_capture_provenance  # noqa: E402
 from capture_stimulus import capture_input  # noqa: E402
 from unified_taxonomy import numbered_id  # noqa: E402
+import unified_history  # noqa: E402
 
 CONF = Path(__file__).resolve().parents[2]   # <repo>/conformance
 REPO = Path(__file__).resolve().parents[3]   # <repo>
@@ -66,6 +67,38 @@ def _peer_cell(result):
         }
     if "capture_input" in result:
         record["capture_input"] = result["capture_input"]
+    return record
+
+
+def _history_peer_cell(store, implementation, capture_id, family, scenario, request):
+    """Reuse an immutable peer observation omitted from the scratch capture feed."""
+    history = store.histories.get((family, implementation))
+    if history is None or capture_id not in history.captures:
+        return None
+    matching = [
+        case_id
+        for case_id, case in history.family.cases.items()
+        if case["scenario"] == scenario
+    ]
+    if len(matching) != 1:
+        return None
+    case_id = matching[0]
+    change = history.resolve(capture_id).get(case_id)
+    if change is None:
+        return None
+    stimulus = change["stimulus"]
+    if "ref" in stimulus:
+        captured_request = history.family.cases[case_id]["request"]
+    elif "inline" in stimulus:
+        captured_request = stimulus["inline"]
+    else:
+        return None
+    if captured_request != request:
+        return None
+    record, document = unified_history.materialized_record(
+        history.family.cases[case_id], change
+    )
+    record.update(document.get("record_metadata", {}))
     return record
 
 
@@ -114,6 +147,7 @@ def main():
 
     # A version dir is written once; accumulate cases into per-(dir, family) docs.
     docs = {}  # (dirname, family) -> {family, mode, [model_label|captured_with], cases:{}}
+    active_cases = {}
 
     def slot(dirname, family, captured_with=None, model_label=None):
         k = (dirname, family)
@@ -133,6 +167,8 @@ def main():
         cid = c["id"]
         key, fam, scenario = _case_key(cid)
         chunks = c.get("chunks") or []
+        request = capture_input(c)
+        active_cases[(fam, scenario)] = (key, request)
 
         # A PR patch capture owns new shared cases in a sparse overlay. The released
         # shared shards remain byte-identical when this generated tree is repackaged.
@@ -158,7 +194,7 @@ def main():
         # dynamo_v2-<ver>/<family>/<key>.yaml — LIVE dynamo (assembled + per-chunk)
         ddir = f"dynamo_v2-{ver['dynamo_v2']}"
         slot(ddir, fam, captured_with={"dynamo_v2": ver["dynamo_v2"]})[key] = {
-            "capture_input": capture_input(c),
+            "capture_input": request,
             "assembled": c.get("dynamo") or [],
             "chunks": [{"expected": ch.get("dynamo") or []} for ch in chunks],
         }
@@ -171,6 +207,22 @@ def main():
             vdir = f"{impl}-{ver[impl]}"
             entry = slot(vdir, fam, captured_with={impl: ver[impl]})
             entry[key] = _peer_cell(res)
+
+    # The scratch peer feeds are ignored build products and can predate a restored
+    # case. Preserve the exact checked-in observation when its scenario and request
+    # still match; a changed request deliberately falls through to package validation.
+    store = unified_history.load_store(CONF / "fixtures-unified-v2")
+    for (fam, scenario), (key, request) in active_cases.items():
+        for impl in ("vllm_python", "vllm_rust", "sglang_python"):
+            capture_id = f"{impl}-{ver[impl]}"
+            existing = docs.get((capture_id, fam), {}).get("cases", {})
+            if key in existing:
+                continue
+            record = _history_peer_cell(
+                store, impl, capture_id, fam, scenario, request
+            )
+            if record is not None:
+                slot(capture_id, fam, captured_with={impl: ver[impl]})[key] = record
 
     # Rebuild generated captures while retaining append-only sparse patch layers.
     _clear_generated_dirs()
