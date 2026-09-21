@@ -512,6 +512,13 @@ fn escape_control_chars_in_strings(s: &str) -> String {
 fn coerce_value(raw: &str, schema_type: Option<&str>) -> ParsedValue {
     let trimmed = raw.trim();
 
+    // A `string` parameter is delivered verbatim: the model's text may
+    // legitimately look like JSON (the content of a .json file, a quoted
+    // phrase), and parsing it would change its type behind the schema's back.
+    if matches!(schema_type, Some("string")) {
+        return Value::String(raw.to_string()).into();
+    }
+
     // If the value already looks like JSON (object, array, or quoted string), parse it directly
     if (trimmed.starts_with('{') || trimmed.starts_with('[') || trimmed.starts_with('"'))
         && let Ok(v) = serde_json::from_str::<Value>(trimmed)
@@ -703,6 +710,15 @@ mod tests {
             try_tool_call_parse_glm47(input, &get_test_config(), Some(&edit_file_tools())).unwrap();
         assert_eq!(calls.len(), 1);
         serde_json::from_str(&calls[0].function.arguments).unwrap()
+    }
+
+    #[test]
+    fn test_string_argument_that_looks_like_json_stays_a_string() {
+        let body = r#"{"name": "site", "scripts": {"dev": "vite"}}"#;
+        let input = format!(
+            "<tool_call>edit_file<arg_key>path</arg_key><arg_value>package.json</arg_value><arg_key>content</arg_key><arg_value>{body}</arg_value></tool_call>"
+        );
+        assert_eq!(parse_args(&input)["content"], body);
     }
 
     #[test]
