@@ -10,6 +10,7 @@ rendering code.
 """
 import copy
 import json
+import os
 import re
 from pathlib import Path
 
@@ -26,6 +27,68 @@ from markers import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = REPO_ROOT / "tests/parity/toolcalling/fixtures"
 RUST_TOOL_CALLING_DIR = REPO_ROOT / "lib/parsers/src/tool_calling"
+
+# The versioned fixture source (inputs/ + per-impl <impl>-<version>/ dirs) lives in
+# the fixture extraction cache (from the in-repo LFS store). `_common.sh` exports
+# CONFORMANCE_FIXTURES_ROOT (the cache root); fall back to the standard cache path for
+# standalone runs. Powers the per-impl version radios: the generator resolves each
+# version snapshot and re-runs the load path so cell keys align exactly with the
+# rendered (pinned) table.
+_FRONTEND_CRATES_ROOT = Path(os.environ.get("FRONTEND_CRATES_ROOT", str(REPO_ROOT)))
+
+
+def _fixtures_cache_root() -> Path:
+    """Fixture extraction cache root (`~/.cache/dynamo/conformance-fixtures`
+    or `$XDG_CACHE_HOME/...`). `_common.sh` exports CONFORMANCE_FIXTURES_ROOT pointing
+    here; honor it first so staged renders and standalone runs agree."""
+    env = os.environ.get("CONFORMANCE_FIXTURES_ROOT")
+    if env:
+        return Path(env)
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".cache"
+    return base / "dynamo/conformance-fixtures"
+
+
+_SRC_FIXTURES = _fixtures_cache_root() / "toolcalling/fixtures-batch-v1"
+# The resolver script stays in the repo (it's code, not a fixture).
+_RESOLVE_SRC_DIR = _FRONTEND_CRATES_ROOT / "conformance/utils/src"
+
+_VERSION_IMPLS = ("dynamo_v1", "vllm_python", "sglang_python")
+
+
+def _version_slug(version: str) -> str:
+    """CSS/DOM-safe token for a version, e.g. 0.5.12.post1 -> 0-5-12-post1."""
+    return re.sub(r"[^0-9A-Za-z]+", "-", version).strip("-")
+
+
+def _version_sort_key(version: str) -> tuple:
+    """Order versions like 0.5.12.post1 < 0.5.14 < 0.24.0 < 3.0.0."""
+    m = re.match(r"(\d+(?:\.\d+)*)(?:[.-]?post(\d+))?", version)
+    release = tuple(int(x) for x in m.group(1).split(".")) if m else ()
+    post = int(m.group(2)) if m and m.group(2) else 0
+    return (release, post)
+
+
+def _impl_versions() -> dict[str, list[str]]:
+    """Discover the versions present per impl from the fixture source dirs,
+    ascending. E.g. {"dynamo_v1": ["3.0.0"], "vllm_python": ["0.23.0", "0.24.0"], ...}."""
+    found: dict[str, list[str]] = {}
+    if not _SRC_FIXTURES.is_dir():
+        return found
+    for d in _SRC_FIXTURES.iterdir():
+        if not d.is_dir() or d.name == "inputs" or "-" not in d.name:
+            continue
+        impl, version = d.name.split("-", 1)
+        if impl in _VERSION_IMPLS:
+            found.setdefault(impl, []).append(version)
+    for impl in found:
+        found[impl] = sorted(set(found[impl]), key=_version_sort_key)
+    return {impl: found[impl] for impl in _VERSION_IMPLS if impl in found}
+
+
+def _pinned_versions(impl_versions: dict[str, list[str]]) -> dict[str, str]:
+    """Latest (pinned) version per impl = the default the radios select."""
+    return {impl: vers[-1] for impl, vers in impl_versions.items() if vers}
 
 
 def _build_family_inheritance(
@@ -425,7 +488,28 @@ def family_suffix(fam: str, no_vllm: set[str], no_sglang: set[str]) -> str:
 _CAPTURED_WITH_BY_MODE: dict[str, dict[str, str]] = {}
 
 
-def load_all_cases(mode: str) -> tuple[dict[tuple[str, str], dict], dict[str, str]]:
+def _iter_mode_docs(mode: str, docs: dict | None = None):
+    """Yield `(fixture_path, parsed_doc)` for one parser mode.
+
+    `docs` — `{(family_dir, filename): doc}` already resolved in memory, INSTEAD of
+    globbing + parsing FIXTURES. The version-status maps resolve ~20 version
+    selections per render; handing the docs straight over skips writing each staged
+    tree to disk and parsing it back. Paths are still built under FIXTURES so
+    `__fixture_path` names a real staged file.
+    """
+    prefix = f"TOOLCALLING.{mode}"
+    if docs is None:
+        for fp in sorted(FIXTURES.glob(f"*/{prefix}*.yaml")):
+            yield fp, yaml.safe_load(fp.read_text())
+        return
+    for family, name in sorted(docs):
+        if name.startswith(prefix) and name.endswith(".yaml"):
+            yield FIXTURES / family / name, docs[(family, name)]
+
+
+def load_all_cases(
+    mode: str, docs: dict | None = None
+) -> tuple[dict[tuple[str, str], dict], dict[str, str]]:
     """Load every fixture YAML for one parser mode.
 
     Returns `(cases, labels)`:
@@ -435,13 +519,16 @@ def load_all_cases(mode: str) -> tuple[dict[tuple[str, str], dict], dict[str, st
       labels — `{family: model_label}` collected from the fixtures' doc-level
                `model_label:` field. Falls back to the family ID if a fixture
                doesn't declare one.
+
+    `docs` — pre-resolved in-memory docs (see `_iter_mode_docs`). NOTE: the case dicts
+    inside are annotated and rewritten in place, so pass a set of docs that belongs to
+    this call alone (resolve_docs() hands back a fresh copy per selection).
     """
     cases: dict[tuple[str, str], dict] = {}
     labels: dict[str, str] = {}
     captured_with: dict[str, str] = {}
     script_dir = Path(__file__).resolve().parent
-    for fp in sorted(FIXTURES.glob(f"*/TOOLCALLING.{mode}*.yaml")):
-        doc = yaml.safe_load(fp.read_text())
+    for fp, doc in _iter_mode_docs(mode, docs):
         if doc.get("mode") != mode:
             continue
         family = doc["family"]
@@ -467,17 +554,21 @@ def load_all_cases(mode: str) -> tuple[dict[tuple[str, str], dict], dict[str, st
             cases[(family, sub)] = case
     _CAPTURED_WITH_BY_MODE[mode] = captured_with
     if mode == "streamv2":
-        _attach_streamv2_batch_expected(cases)
+        _attach_streamv2_batch_expected(cases, docs)
     return _normalize_split_parent_cases(cases), labels
 
 
-def _attach_streamv2_batch_expected(cases: dict) -> None:
+def _attach_streamv2_batch_expected(cases: dict, docs: dict | None = None) -> None:
     """For each streamv2 case, attach `batch_expected[impl]` from the matching batch
     case (same family + sub), so the stream tab can color each engine's stream
-    against its own batch (streamv2.<sub> mirrors batch.<sub>)."""
+    against its own batch (streamv2.<sub> mirrors batch.<sub>).
+
+    Reads the same source as its caller: with in-memory `docs` from a stream-only
+    resolve there are no batch docs to match, exactly as when the caller staged a
+    stream-only tree on disk."""
     batch_exp: dict[tuple[str, str], dict] = {}
-    for fp in sorted(FIXTURES.glob("*/TOOLCALLING.batch*.yaml")):
-        doc = yaml.safe_load(fp.read_text()) or {}
+    for _fp, doc in _iter_mode_docs("batch", docs):
+        doc = doc or {}
         if doc.get("mode") != "batch":
             continue
         family = doc["family"]
@@ -499,12 +590,19 @@ def _derive_stream_expected(case: dict) -> dict:
     sets the call name; `arguments` fragments are concatenated and parsed as JSON
     (kept as a raw string if not valid JSON — e.g. a truncated body)."""
     unavailable = case.get("unavailable", {}) or {}
+    exception = case.get("exception", {}) or {}
     chunks = case.get("chunks", []) or []
     derived: dict = {}
     unavailable = _normalize_impl_mapping(unavailable)
+    exception = _normalize_impl_mapping(exception)
     for impl in IMPL_KEYS:
         if impl in unavailable:
             derived[impl] = {"unavailable": unavailable[impl]}
+            continue
+        # The parser ran and threw: a concrete failure block (surfaced verbatim), NOT a
+        # benign "not applicable". `exception` and `unavailable` are mutually exclusive.
+        if impl in exception:
+            derived[impl] = {"exception": exception[impl]}
             continue
         has_chunk_data = any(
             impl in _normalize_impl_mapping((chunk.get("expected") or {}))
@@ -546,9 +644,9 @@ def _derive_stream_expected(case: dict) -> dict:
         block = {"calls": calls, "normal_text": normal}
         # Peer divergence from Dynamo parser v2 streaming is captured
         # ground truth, not an un-triaged gap — text vs token streaming differ by
-        # design. Tag peer blocks with a reason so the cell shows `S`/`V` (known
-        # divergence), never `S_rs?`/`V_ps?` (research-needed). The per-chunk `expected`
-        # in the fixture is the detailed evidence.
+        # design. Tag peer blocks with a reason so the cell reads as a documented
+        # (known) divergence, never research-needed. The per-chunk `expected` in the
+        # fixture is the detailed evidence.
         if impl in PEER_IMPL_KEYS:
             block["explanation"] = (
                 f"Captured from the {IMPL_DISPLAY[impl]} streaming parser. Streaming output differs "

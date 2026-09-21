@@ -15,30 +15,12 @@ in ascending order up to and including the selected version, patching expected.<
 Default select = latest available per impl. Readers (reasoning/table.py) consume the flat
 output unchanged.
 """
-import argparse, re, sys
+import argparse, sys
 from pathlib import Path
 import yaml
-# PERF: route safe_load through libyaml's CSafeLoader (identical result, ~15x faster).
-if hasattr(yaml, "CSafeLoader"):
-    yaml.safe_load = lambda _s, _loader=yaml.CSafeLoader: yaml.load(_s, Loader=_loader)
-
-
-def load(p):
-    return yaml.safe_load(Path(p).read_text())
-
-
-def version_key(ver: str):
-    """Order versions like 0.5.12.post1 < 0.5.14 < 0.24.0 < 3.0.0."""
-    m = re.match(r"(\d+(?:\.\d+)*)(?:[.-]?post(\d+))?", ver)
-    release = tuple(int(x) for x in m.group(1).split(".")) if m else ()
-    post = int(m.group(2)) if m and m.group(2) else 0
-    return (release, post)
-
-
-def split_impl_ver(dirname: str):
-    """'vllm-0.23.0' -> ('vllm', '0.23.0'); impl names never contain '-'."""
-    impl, _, ver = dirname.partition("-")
-    return impl, ver
+import yaml_fast  # noqa: F401 — routes safe_load/safe_dump through libyaml
+from fixture_corpus import load, version_key  # noqa: F401 — re-exported
+from fixture_corpus import split_sel as split_impl_ver
 
 
 # The captured_with key each impl records its engine version under.
@@ -106,13 +88,15 @@ def resolve(fixtures_root, out, select, verbose=False):
             key=lambda t: t[0],
         )
         applied = [(k, d) for k, d in vdirs if k <= target_k]
-        # Stamp the SELECTED version onto every fixture with this impl's output, whether
-        # or not an overlay changed it (the selected engine is what this page renders).
-        _stamp_captured_with(out, impl, target)
+        # Stamp the version whose data this page actually shows: the highest overlay at
+        # or below the target. Stamping the SELECTED version unconditionally made the tab
+        # claim a peer version that has no capture in this corpus — e.g. a pinned 0.26.0
+        # labelling 0.24.0's captured output, which is a provenance lie, not a display
+        # nicety. With no overlay at or below the target, the anchor's own captured_with
+        # already names the version that produced the data, so leave it alone.
         if not applied:
-            # No overlay for this version = the anchor already holds the selected
-            # engine's output (nothing changed at/below it); the stamp above is enough.
             continue
+        _stamp_captured_with(out, impl, split_impl_ver(applied[-1][1].name)[1])
         for _, vdir in applied:
             for ofp in vdir.glob("*/*.yaml"):
                 tgt = out / ofp.parent.name / ofp.name

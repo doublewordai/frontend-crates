@@ -22,7 +22,6 @@ use crate::error::OpenAIError;
 // Consumers should use them via `dynamo_protocols::types::*` as before.
 
 pub use async_openai::types::chat::{
-    ChatChoiceLogprobs,
     ChatCompletionAudio,
     ChatCompletionAudioFormat,
     ChatCompletionAudioVoice,
@@ -46,7 +45,6 @@ pub use async_openai::types::chat::{
     ChatCompletionRequestSystemMessageContent,
     ChatCompletionRequestSystemMessageContentPart,
     ChatCompletionResponseMessageAudio,
-    ChatCompletionTokenLogprob,
     Choice,
     CompletionFinishReason,
     CompletionTokensDetails,
@@ -380,6 +378,27 @@ pub struct ChatCompletionRequestToolMessage {
     pub tool_call_id: String,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct ChatChoiceLogprobs {
+    pub content: Option<Vec<ChatCompletionTokenLogprob>>,
+    pub refusal: Option<Vec<ChatCompletionTokenLogprob>>,
+}
+
+/// Token logprob entry with optional backend token ID.
+///
+/// Some inference backends can report both the rendered token string and its
+/// vocabulary ID. Keeping this optional preserves the upstream OpenAI shape
+/// when token IDs are unavailable.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct ChatCompletionTokenLogprob {
+    pub token: String,
+    pub logprob: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_id: Option<u32>,
+    pub bytes: Option<Vec<u8>>,
+    pub top_logprobs: Vec<TopLogprobs>,
+}
+
 #[derive(Clone, Serialize, Default, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ChatCompletionToolType {
@@ -706,7 +725,11 @@ pub struct ChatCompletionRequestAssistantMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<ChatCompletionRequestAssistantMessageContent>,
     /// Reasoning content from a previous assistant turn.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Accept both `reasoning_content` (DeepSeek /
+    /// SGLang / TRT-LLM / Vercel AI SDK openai-compatible / LangChain / LiteLLM
+    /// canonical) and `reasoning` (vLLM native / OpenRouter / OpenAI GPT-OSS
+    /// guidance) on inbound assistant messages, normalizing both to this field.
+    #[serde(default, alias = "reasoning", skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<ReasoningContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<String>,
@@ -763,6 +786,11 @@ pub struct ChatCompletionResponseMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio: Option<ChatCompletionResponseMessageAudio>,
     /// Reasoning content produced by the model (DeepSeek-R1, QwQ).
+    /// Accepts either `reasoning_content` (DeepSeek / SGLang / TRT-LLM
+    /// canonical) or `reasoning` (vLLM native / OpenRouter / OpenAI GPT-OSS)
+    /// on input via the alias; output-side key selection is handled at the
+    /// HTTP boundary by ai-dynamo/dynamo#11464's `RoutedReasoning` wrapper.
+    #[serde(default, alias = "reasoning")]
     pub reasoning_content: Option<String>,
 }
 
@@ -905,7 +933,11 @@ pub struct ChatCompletionStreamResponseDelta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<String>,
     /// Streaming reasoning content (DeepSeek-R1, QwQ models).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Accepts either `reasoning_content` (DeepSeek / SGLang / TRT-LLM
+    /// canonical) or `reasoning` (vLLM native / OpenRouter / OpenAI GPT-OSS)
+    /// on input via the alias; output-side key selection is handled at the
+    /// HTTP boundary by ai-dynamo/dynamo#11464's `RoutedReasoning` wrapper.
+    #[serde(default, alias = "reasoning", skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
 }
 
@@ -1466,5 +1498,68 @@ mod tests {
             parts[3],
             ChatCompletionRequestToolMessageContentPart::AudioUrl(_)
         ));
+    }
+
+    #[test]
+    fn chat_logprob_serializes_token_id_when_present() {
+        let logprob = ChatCompletionTokenLogprob {
+            token: " hello".into(),
+            logprob: -0.12,
+            token_id: Some(123),
+            bytes: Some(vec![32, 104, 101, 108, 108, 111]),
+            top_logprobs: vec![],
+        };
+
+        let json = serde_json::to_value(logprob).unwrap();
+
+        assert_eq!(json["token_id"], 123);
+    }
+
+    #[test]
+    fn chat_logprob_deserializes_optional_fields() {
+        let choice_logprobs: ChatChoiceLogprobs = serde_json::from_value(serde_json::json!({
+            "content": [{
+                "token": " hello",
+                "logprob": -0.12,
+                "top_logprobs": []
+            }]
+        }))
+        .unwrap();
+        let token_logprob: ChatCompletionTokenLogprob = serde_json::from_value(serde_json::json!({
+            "token": " hello",
+            "logprob": -0.12,
+            "token_id": 123,
+            "bytes": [32, 104, 101, 108, 108, 111],
+            "top_logprobs": []
+        }))
+        .unwrap();
+
+        assert_eq!(choice_logprobs.content.as_ref().unwrap()[0].token_id, None);
+        assert!(choice_logprobs.refusal.is_none());
+        assert_eq!(token_logprob.token_id, Some(123));
+        assert_eq!(token_logprob.bytes, Some(vec![32, 104, 101, 108, 108, 111]));
+    }
+
+    #[test]
+    fn chat_logprob_preserves_nullable_fields() {
+        let choice_logprobs = ChatChoiceLogprobs {
+            content: None,
+            refusal: None,
+        };
+        let token_logprob = ChatCompletionTokenLogprob {
+            token: " hello".into(),
+            logprob: -0.12,
+            token_id: None,
+            bytes: None,
+            top_logprobs: vec![],
+        };
+
+        let choice_json = serde_json::to_value(choice_logprobs).unwrap();
+        let token_json = serde_json::to_value(token_logprob).unwrap();
+
+        assert_eq!(choice_json["content"], serde_json::Value::Null);
+        assert_eq!(choice_json["refusal"], serde_json::Value::Null);
+        assert!(token_json.get("token_id").is_none());
+        assert_eq!(token_json["bytes"], serde_json::Value::Null);
     }
 }

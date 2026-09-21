@@ -50,6 +50,16 @@ def _case_key(case_id):
     return numbered_id(scenario), fam, scenario
 
 
+def _peer_cell(result):
+    """Store a peer failure instead of its partial output."""
+    if result.get("error"):
+        return {"error": result["error"]}
+    return {
+        "assembled": result.get("assembled") or [],
+        "chunks": [{"expected": events or []} for events in (result.get("chunks") or [])],
+    }
+
+
 def main():
     feed = yaml.safe_load((BUILD / "unified_results.yaml").read_text())
     caps = {}
@@ -93,6 +103,8 @@ def main():
             "scenario": scenario,
             "description": c.get("description", ""),
             "policy": c.get("policy") or [],
+            "init": c.get("init") or {"starting_state": "None", "tool_output_mode": "Native", "named_tool": None},
+            "finish_reason": c.get("finish_reason") or "stop",
             "input": c.get("input", ""),
             "chunks": [
                 {"delta_text": ch.get("delta_text", "")} for ch in chunks
@@ -118,13 +130,7 @@ def main():
                 continue
             vdir = f"{impl}-{ver[impl]}"
             entry = slot(vdir, fam, captured_with={impl: ver[impl]})
-            cell = {}
-            if res.get("error"):
-                cell["error"] = res["error"]
-            else:
-                cell["assembled"] = res.get("assembled") or []
-                cell["chunks"] = [{"expected": e or []} for e in (res.get("chunks") or [])]
-            entry[key] = cell
+            entry[key] = _peer_cell(res)
 
     # Clear old exploded dirs, then write one file per case.
     for sub in ("inputs", "golden"):
@@ -144,16 +150,11 @@ def main():
 
 
 def _dynamo_v2_version():
-    # Mirror generate_conformance_table._dynamo_v2_version without importing the whole module.
-    try:
-        import tomllib
-    except ModuleNotFoundError:
-        import tomli as tomllib
-    cargo = REPO / "parsers" / "v2" / "Cargo.toml"
-    try:
-        return tomllib.loads(cargo.read_text())["package"]["version"]
-    except Exception:
-        return "0.1.x"
+    # Shared with refresh_dynamo_captures so the dir this writes is the dir that
+    # one created. No fallback: a guessed label files cases under a version that
+    # was never captured.
+    from dynamo_version import dynamo_v2_label
+    return dynamo_v2_label(REPO)
 
 
 if __name__ == "__main__":
