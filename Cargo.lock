@@ -923,7 +923,7 @@ dependencies = [
  "axum",
  "clap",
  "dynamo-parsers",
- "dynamo-protocols",
+ "dynamo-protocols 5.0.1",
  "dynamo-renderer",
  "dynamo-tokenizers",
  "futures",
@@ -943,7 +943,7 @@ dependencies = [
  "aho-corasick",
  "anyhow",
  "async-stream",
- "dynamo-protocols",
+ "dynamo-protocols 5.4.3",
  "futures",
  "num-traits",
  "openai-harmony",
@@ -999,12 +999,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-protocols"
+version = "5.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1cdacfc1398779cf173d5ff54438d9f14682f76875b6879853a84cc7d646228"
+dependencies = [
+ "async-openai",
+ "derive_builder",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "dynamo-renderer"
 version = "5.0.0"
 dependencies = [
  "anyhow",
  "chrono",
- "dynamo-protocols",
+ "dynamo-protocols 5.0.1",
  "dynamo-tokenizers",
  "either",
  "minijinja",

@@ -472,20 +472,52 @@ fn consume_glm47_close_markers(text: &str, mut cursor: usize, config: &Glm47Pars
     }
 }
 
-/// Decode XML character entities in a string.
-/// Handles the five predefined XML entities: &lt; &gt; &amp; &quot; &apos;
-fn decode_xml_entities(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
+/// Escape raw control characters that appear inside JSON string literals.
+fn escape_control_chars_in_strings(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let (mut in_string, mut escaped) = (false, false);
+    for c in s.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                out.push(c);
+            } else if c == '\\' {
+                escaped = true;
+                out.push(c);
+            } else if c == '"' {
+                in_string = false;
+                out.push(c);
+            } else if (c as u32) < 0x20 {
+                match c {
+                    '\n' => out.push_str("\\n"),
+                    '\t' => out.push_str("\\t"),
+                    '\r' => out.push_str("\\r"),
+                    _ => out.push_str(&format!("\\u{:04x}", c as u32)),
+                }
+            } else {
+                out.push(c);
+            }
+        } else {
+            if c == '"' {
+                in_string = true;
+            }
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Coerce a raw string value using the tool's parameter schema.
 /// Falls back to string if no schema is available or the type is unrecognized.
 fn coerce_value(raw: &str, schema_type: Option<&str>) -> ParsedValue {
     let trimmed = raw.trim();
+
+    // A `string` parameter is delivered verbatim: the model's text may
+    // legitimately look like JSON (the content of a .json file, a quoted
+    // phrase), and parsing it would change its type behind the schema's back.
+    if matches!(schema_type, Some("string")) {
+        return Value::String(raw.to_string()).into();
+    }
 
     // If the value already looks like JSON (object, array, or quoted string), parse it directly
     if (trimmed.starts_with('{') || trimmed.starts_with('[') || trimmed.starts_with('"'))
@@ -522,6 +554,17 @@ fn coerce_value(raw: &str, schema_type: Option<&str>) -> ParsedValue {
                 && v.is_array()
             {
                 return v.into();
+            }
+            // Models emit raw tabs/newlines inside JSON strings; strict JSON rejects them.
+            if let Ok(v) = serde_json::from_str::<Value>(&escape_control_chars_in_strings(trimmed))
+                && v.is_array()
+            {
+                return v.into();
+            }
+            // Bracketed text that still fails to parse is broken JSON, not a comma list:
+            // splitting it would hand the caller shards of the model's text.
+            if trimmed.starts_with('[') {
+                return Value::String(raw.to_string()).into();
             }
             let items: Vec<Value> = trimmed
                 .split(',')
@@ -609,12 +652,12 @@ fn parse_tool_call_block(
         let raw_value = cap.get(2).map(|m| m.as_str()).unwrap_or("");
 
         if !key.is_empty() {
-            // Decode XML entities (e.g. &lt; → <, &amp; → &) before parsing
-            let decoded = decode_xml_entities(raw_value);
-
-            // Look up the expected type from the tool's parameter schema
+            // The value is delivered as the model wrote it. GLM does not XML-escape
+            // argument text, so `&amp;` in a value is source text (JSX, HTML), not an
+            // escape: decoding it makes exact-match edit tools miss and rewrites the
+            // code a write tool receives.
             let schema_type = get_param_schema_type(tools, &function_name, key);
-            let json_value = coerce_value(&decoded, schema_type);
+            let json_value = coerce_value(raw_value, schema_type);
 
             arguments.insert(key.to_string(), json_value);
         }
@@ -644,6 +687,77 @@ mod tests {
 
     fn get_test_config() -> Glm47ParserConfig {
         Glm47ParserConfig::default()
+    }
+
+    fn edit_file_tools() -> Vec<ToolDefinition> {
+        vec![ToolDefinition {
+            name: "edit_file".to_string(),
+            parameters: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "old_str": {"type": "string"},
+                    "content": {"type": "string"},
+                    "edits": {"type": "array"}
+                }
+            })),
+            strict: None,
+        }]
+    }
+
+    fn parse_args(input: &str) -> serde_json::Value {
+        let (calls, _) =
+            try_tool_call_parse_glm47(input, &get_test_config(), Some(&edit_file_tools())).unwrap();
+        assert_eq!(calls.len(), 1);
+        serde_json::from_str(&calls[0].function.arguments).unwrap()
+    }
+
+    #[test]
+    fn test_string_argument_that_looks_like_json_stays_a_string() {
+        let body = r#"{"name": "site", "scripts": {"dev": "vite"}}"#;
+        let input = format!(
+            "<tool_call>edit_file<arg_key>path</arg_key><arg_value>package.json</arg_value><arg_key>content</arg_key><arg_value>{body}</arg_value></tool_call>"
+        );
+        assert_eq!(parse_args(&input)["content"], body);
+    }
+
+    #[test]
+    fn test_array_argument_accepts_raw_control_characters_in_strings() {
+        let input = "<tool_call>edit_file<arg_key>path</arg_key><arg_value>root.tsx</arg_value><arg_key>edits</arg_key><arg_value>[{\"old_str\": \"\t\t<CartProvider>\nnext, line\", \"new_str\": \"x\"}]</arg_value></tool_call>";
+        let args = parse_args(input);
+        assert_eq!(
+            args["edits"][0]["old_str"],
+            "\t\t<CartProvider>\nnext, line"
+        );
+    }
+
+    #[test]
+    fn test_broken_json_array_is_not_comma_split() {
+        let input = r#"<tool_call>edit_file<arg_key>path</arg_key><arg_value>a.jsx</arg_value><arg_key>edits</arg_key><arg_value>[{"old_str": "f(a, b)" "old_str2": "x"}]</arg_value></tool_call>"#;
+        let args = parse_args(input);
+        assert!(
+            args["edits"].is_string(),
+            "broken JSON must reach the caller as written, got {}",
+            args["edits"]
+        );
+    }
+
+    #[test]
+    fn test_argument_text_keeps_xml_entities() {
+        let line =
+            "<h2>System &amp; Intelligence &mdash; that&apos;s it &lt;3 &quot;x&quot; &gt;</h2>";
+        let input = format!(
+            "<tool_call>edit_file<arg_key>path</arg_key><arg_value>app.jsx</arg_value><arg_key>old_str</arg_key><arg_value>{line}</arg_value></tool_call>"
+        );
+        assert_eq!(parse_args(&input)["old_str"], line);
+    }
+
+    #[test]
+    fn test_array_argument_keeps_xml_entities_inside_json() {
+        let input = r#"<tool_call>edit_file<arg_key>path</arg_key><arg_value>app.jsx</arg_value><arg_key>edits</arg_key><arg_value>[{"old_str": "a &amp; b", "new_str": "a &amp; c"}]</arg_value></tool_call>"#;
+        let args = parse_args(input);
+        assert_eq!(args["edits"][0]["old_str"], "a &amp; b");
+        assert_eq!(args["edits"][0]["new_str"], "a &amp; c");
     }
 
     #[test] // helper
@@ -971,7 +1085,7 @@ mod tests {
     }
 
     #[test] // helper
-    fn test_xml_entity_decoding() {
+    fn test_xml_entities_are_not_decoded() {
         let config = get_test_config();
         let message = r#"<tool_call>write_file<arg_key>content</arg_key><arg_value>x &lt; y &amp;&amp; y &gt; z</arg_value></tool_call>"#;
 
@@ -982,7 +1096,7 @@ mod tests {
             serde_json::from_str(&calls[0].function.arguments).unwrap();
         assert_eq!(
             args.get("content").unwrap().as_str().unwrap(),
-            "x < y && y > z"
+            "x &lt; y &amp;&amp; y &gt; z"
         );
     }
 
