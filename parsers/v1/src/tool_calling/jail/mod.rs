@@ -2983,6 +2983,7 @@ mod tests {
                     .map(
                         |(i, c)| dynamo_protocols::types::ChatCompletionTokenLogprob {
                             token: c.to_string(),
+                            token_id: None,
                             logprob: -(i as f32 + 1.0) * 0.1,
                             bytes: Some(c.to_string().into_bytes()),
                             top_logprobs: vec![],
