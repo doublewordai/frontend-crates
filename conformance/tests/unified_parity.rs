@@ -17,10 +17,13 @@
 
 mod common;
 
+use common::Init;
+
 use std::collections::BTreeMap;
 
 use dynamo_parsers_v2::{
-    REGISTERED_UNIFIED_FAMILIES, Tool, UnifiedEvent, assemble, create_unified_parser_for_family,
+    REGISTERED_UNIFIED_FAMILIES, Tool, UnifiedEvent, UnifiedParserExt, assemble,
+    create_unified_parser_for_family,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -35,6 +38,11 @@ struct GoldenFile {
 struct GoldenCase {
     input: String,
     golden: Vec<UnifiedEvent>,
+    /// Request-scoped parser configuration, declared by the case. Shared with
+    /// `unified_render` via `common::Init` so both harnesses configure a case
+    /// identically; see that type for why it is declared and not inferred.
+    #[serde(default)]
+    init: Init,
 }
 
 /// Tool schemas the corpus is written against (string params, so a value like
@@ -52,6 +60,7 @@ fn tools() -> Vec<Tool> {
         mk("f", "x"),
         mk("g", "y"),
         mk("run", "cmd"),
+        mk("sum_values", "values"),
         mk("log", "note"),
     ]
 }
@@ -77,9 +86,11 @@ fn has_unified_parser(family: &str) -> bool {
     create_unified_parser_for_family(family, &[]).is_ok()
 }
 
-fn events(family: &str, chunks: &[String]) -> Vec<UnifiedEvent> {
+fn events(family: &str, chunks: &[String], init: &Init) -> Vec<UnifiedEvent> {
     let mut parser = create_unified_parser_for_family(family, &tools())
         .unwrap_or_else(|e| panic!("create unified parser for `{family}`: {e}"));
+    init.apply(&mut parser, family);
+
     let mut deltas = Vec::new();
     for chunk in chunks {
         deltas.extend(parser.push(chunk).unwrap_or_else(|e| panic!("push: {e}")));
@@ -166,7 +177,7 @@ fn unified_parser_matches_the_golden_oracle() {
     for file in &covered {
         for (id, case) in &file.cases {
             checked += 1;
-            let got = events(&file.family, &chunk_markers(&case.input));
+            let got = events(&file.family, &chunk_markers(&case.input), &case.init);
             if got != case.golden {
                 failures.push(format!(
                     "{id}\n     input: {:?}\n    golden: {}\n   unified: {}",
@@ -196,9 +207,9 @@ fn unified_parser_is_chunk_invariant() {
         .filter(|f| has_unified_parser(&f.family))
     {
         for (id, case) in &file.cases {
-            let baseline = events(&file.family, std::slice::from_ref(&case.input));
+            let baseline = events(&file.family, std::slice::from_ref(&case.input), &case.init);
             for (label, chunks) in splittings(&case.input) {
-                let got = events(&file.family, &chunks);
+                let got = events(&file.family, &chunks, &case.init);
                 if got != baseline {
                     failures.push(format!(
                         "{id} [{label}, {} chunks]\n  whole: {}\n    got: {}",
@@ -226,8 +237,10 @@ fn unified_parser_has_stream_batch_parity() {
         .filter(|f| has_unified_parser(&f.family))
     {
         for (id, case) in &file.cases {
-            let streamed = events(&file.family, &chunk_markers(&case.input));
+            let streamed = events(&file.family, &chunk_markers(&case.input), &case.init);
             let mut parser = create_unified_parser_for_family(&file.family, &tools()).unwrap();
+            case.init.apply(&mut parser, id);
+
             let batch = parser
                 .parse_complete(&case.input)
                 .unwrap_or_else(|e| panic!("{id}: parse_complete: {e}"));
@@ -256,11 +269,14 @@ fn unified_parsers_are_isolated_per_stream() {
                 continue;
             };
             let (ca, cb) = (chunk_markers(&a.input), chunk_markers(&b.input));
-            let solo_a = events(&file.family, &ca);
-            let solo_b = events(&file.family, &cb);
+            let solo_a = events(&file.family, &ca, &a.init);
+            let solo_b = events(&file.family, &cb, &b.init);
 
             let mut pa = create_unified_parser_for_family(&file.family, &tools()).unwrap();
             let mut pb = create_unified_parser_for_family(&file.family, &tools()).unwrap();
+            a.init.apply(&mut pa, id_a);
+            b.init.apply(&mut pb, id_b);
+
             let (mut da, mut db) = (Vec::new(), Vec::new());
             for i in 0..ca.len().max(cb.len()) {
                 if let Some(c) = ca.get(i) {
@@ -270,8 +286,8 @@ fn unified_parsers_are_isolated_per_stream() {
                     db.extend(pb.push(c).unwrap());
                 }
             }
-            da.extend(pa.finish().unwrap());
-            db.extend(pb.finish().unwrap());
+            da.extend(pa.finish().unwrap().events);
+            db.extend(pb.finish().unwrap().events);
 
             assert_eq!(
                 assemble(&da),
@@ -298,5 +314,56 @@ fn registered_unified_families_all_create() {
     assert!(
         load_golden().iter().any(|f| has_unified_parser(&f.family)),
         "no golden family maps to a registered unified parser"
+    );
+}
+
+/// The manifest and the parser registry must agree about which families are native.
+///
+/// These are two different systems — a YAML row read by the conformance harness, and a
+/// `match` compiled into `dynamo-parsers-v2` — and nothing links them at compile time.
+/// Before, five lists carried this and a family added to one but missed in another
+/// failed loudly at best and silently lost coverage at worst. This is the one assertion
+/// that keeps the single declaration honest, in both directions.
+#[test]
+fn manifest_and_parser_registry_agree_on_native_families() {
+    let mut wrong = Vec::new();
+    for (family, row) in common::unified_families() {
+        let constructs = create_unified_parser_for_family(&family, &[]).is_ok();
+        if row.native && !constructs {
+            wrong.push(format!(
+                "{family}: manifest says native, but create_unified_parser_for_family rejects it \
+                 — add it to `unified_registry!` in parsers/v2/src/unified/mod.rs"
+            ));
+        }
+        if !row.native && constructs {
+            wrong.push(format!(
+                "{family}: a native UnifiedParser exists, but the manifest still says \
+                 native: false — flip it in conformance/utils/src/parser_families.yaml"
+            ));
+        }
+    }
+    // ...and the other direction. Iterating manifest rows alone leaves a hole: a family
+    // added to `unified_registry!` with NO manifest row is invisible here, constructs
+    // fine, and silently gets no golden coverage — the exact failure this guard exists
+    // to prevent, one level up.
+    let declared: std::collections::BTreeSet<String> = common::unified_families()
+        .iter()
+        .filter(|(_, row)| row.native)
+        .flat_map(|(family, row)| [family.clone(), row.registry_key(family).to_string()])
+        .collect();
+    for registered in REGISTERED_UNIFIED_FAMILIES {
+        if !declared.contains(*registered) {
+            wrong.push(format!(
+                "{registered}: in `unified_registry!` but no native `unified:` row declares it \
+                 — add one in conformance/utils/src/parser_families.yaml, or it gets no \
+                 golden coverage"
+            ));
+        }
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "manifest/registry disagree:\n  {}",
+        wrong.join("\n  ")
     );
 }

@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.3.2](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-parsers-v2-v0.3.1...dynamo-parsers-v2-v0.3.2) - 2026-08-21
+
+### Features
+
+- *(parsers)* Stream guided tool calls in v1 and v2 ([#194](https://github.com/ai-dynamo/frontend-crates/pull/194))
+
+## [0.3.0](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-parsers-v2-v0.2.1...dynamo-parsers-v2-v0.3.0) - 2026-08-19
+
+### Features
+
+- *(parsers)* Shared scanner params, and guided tool-call fragment streaming ([#190](https://github.com/ai-dynamo/frontend-crates/pull/190))
+
+## [0.2.1](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-parsers-v2-v0.2.0...dynamo-parsers-v2-v0.2.1) - 2026-08-18
+
+### Features
+
+- *(parsers)* Add Qwen3 unified request modes ([#174](https://github.com/ai-dynamo/frontend-crates/pull/174))
+
+## [0.1.27](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-parsers-v2-v0.1.26...dynamo-parsers-v2-v0.1.27) - 2026-08-03
+
+### Miscellaneous
+
+- Update Cargo.lock dependencies
+
+## [0.1.26](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-parsers-v2-v0.1.25...dynamo-parsers-v2-v0.1.26) - 2026-08-03
+
+### Refactoring
+
+- *(conformance)* One manifest row per unified family, plus popup pin/press — NO PARSER CHANGE ([#169](https://github.com/ai-dynamo/frontend-crates/pull/169))
+
+## [0.1.25](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-parsers-v2-v0.1.24...dynamo-parsers-v2-v0.1.25) - 2026-07-30
+
+### Miscellaneous
+
+- *(conformance)* Simplify and remove old unused v1 HTML generator ([#167](https://github.com/ai-dynamo/frontend-crates/pull/167))
+
 ## [0.1.24](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-parsers-v2-v0.1.23...dynamo-parsers-v2-v0.1.24) - 2026-07-30
 
 ### Features

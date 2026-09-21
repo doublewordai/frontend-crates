@@ -93,11 +93,6 @@ def model_v2() -> dict:
     return _read_model(REPO / "conformance/CONFORMANCE_v2.html", "render_table_v2.sh")
 
 
-@pytest.fixture(scope="module")
-def model_v1() -> dict:
-    return _read_model(REPO / "conformance/PARITY_v1.html", "render_table_v1.sh")
-
-
 def _tab(model: dict, tab_id: str) -> dict:
     for t in model["tabs"]:
         if t["id"] == tab_id:
@@ -123,7 +118,11 @@ def _peer_versions(tree: str) -> dict[str, set[str]]:
     return out
 
 
-_VER_PAREN = re.compile(r"\b\d[\w.]*\s+\([^)]+\)\s*$")
+# A version token then a parenthesized mode, e.g. "0.1.24 (stream)". `+` is allowed in
+# the token because a capture can be filed under a change-scoped label ("0.1.24+pr163")
+# to compare one code state against another within a single release — see
+# conformance/utils/src/dynamo_version.py.
+_VER_PAREN = re.compile(r"\b\d[\w.+-]*\s+\([^)]+\)\s*$")
 
 # ---- schema + shape -----------------------------------------------------------
 
@@ -328,7 +327,9 @@ def test_v2_cmp_payload_shape(model_v2):
     for t in model_v2["tabs"]:
         for cell in _iter_cells(t):
             for key, entry in (cell.get("cmp") or {}).items():
-                assert set(entry) == {"sig", "leak", "na"}, entry
+                # `err` flags a candidate that ran and THREW (an `exception` block): not
+                # `na`, so a threw-Reference vs a parsed peer reddens the cell.
+                assert set(entry) == {"sig", "leak", "na", "err"}, entry
                 assert isinstance(entry["sig"], int)
 
 
@@ -485,33 +486,3 @@ def test_v2_reasoning_uses_current_peers(model_v2):
     for impl in ("vllm_python", "sglang_python"):
         for ver in peers.get(impl, set()):
             assert ver in r, f"reasoning missing current peer {impl} {ver}"
-
-
-# ---- v1 PARITY page -----------------------------------------------------------
-
-def test_v1_all_tabs_present(model_v1):
-    ids = [t["id"] for t in model_v1["tabs"]]
-    assert ids == [
-        "tab-toolcalling-batch", "tab-toolcalling-stream",
-        "tab-reasoning-batch", "tab-reasoning-stream",
-    ], ids
-
-
-def test_v1_cells_have_compare_data(model_v1):
-    n = sum(1 for t in model_v1["tabs"] for c in _iter_cells(t) if c.get("cmp"))
-    assert n > 100, f"only {n} v1 cells carry a compare payload"
-
-
-def test_v1_every_candidate_is_versioned(model_v1):
-    for t in model_v1["tabs"]:
-        for c in t["candidates"]:
-            assert _VER_PAREN.search(c["label"]), f"{t['id']}: unversioned candidate {c['label']!r}"
-
-
-def test_v1_toolcalling_has_both_old_and_new_peers(model_v1):
-    # PARITY_v1 shows ALL captured peer versions (v1-era + current).
-    labels = " ".join(c["label"] for c in _tab(model_v1, "tab-toolcalling-batch")["candidates"])
-    peers = _peer_versions("toolcalling/fixtures-batch-v1")
-    for impl in ("vllm_python", "sglang_python"):
-        vers = peers.get(impl, set())
-        assert sum(1 for v in vers if v in labels) >= min(2, len(vers)), f"v1 missing {impl} versions"

@@ -2,38 +2,26 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generate the conformance table (matrix of cell markers) from the YAML fixtures.
+"""Generate the conformance table from the YAML fixtures.
 
-================================================================================
-EXAMPLE OUTPUT (truncated; illustrative, NOT a snapshot of current fixtures
-— run the script for the real table):
+Reads every `tests/parity/toolcalling/fixtures/<family>/TOOLCALLING.batch*.yaml` and
+emits the conformance table. The HTML page (`--html`) is rendered ENTIRELY by the JS
+view from a single JSON data model (DIS-2434): Python computes structured per-cell
+`comparison_facts()` (see `markers.py`) and the view renders the glyphs with full
+descriptive labels ("vLLM Python batch parser", "Dynamo Rust stream parser", …).
 
-    | model          | parser     | 1 | 2.a | 2.b | 2.c | ... | 9 | 10 |
-    |---|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-    | **Top-N models** |   |   |   |   |   |   |   |   |
-    | Kimi K2.6      | kimi_k2    | = | =   | =   | V_pbS_rb | ... | = | =  |
-    | gpt-oss        | harmony †  | S_rb | S_rb | n/a | S_rb? | ... | = | S_rb |
-    | **Others** |   |   |   |   |   |   |   |   |
-    | Mistral series | mistral    | S_rb | S_rb | n/a | V_pbS_rb | ... | = | S_rb |
+There is no user-facing parser-marker shorthand mini-language. `cell_for` /
+`_stream_xeng_marker` still emit compact per-engine agreement strings, but purely as
+an INTERNAL representation that `_compute_stats` buckets on — those strings never
+reach the page.
 
-================================================================================
-
-Reads every `tests/parity/toolcalling/fixtures/<family>/TOOLCALLING.batch*.yaml` and emits
-the conformance table.
-
-Cell markers (Dynamo Rust + vLLM Rust + vLLM Python + SGLang):
-  =     peer block matches the Dynamo baseline block (`expected.dynamo_v1` batch / `expected.dynamo_v2` stream)
-  D_rb      Dynamo Rust batch parser output diverges from the selected parser
-  D_rs      Dynamo Rust stream parser output diverges from the selected parser
-  V_pb      vLLM Python batch parser output diverges from the selected parser
-  V_ps      vLLM Python stream parser output diverges from the selected parser
-  V_rs      vLLM Rust stream parser output diverges from the selected parser; no V_rb exists
-  S_rb      SGLang batch parser output diverges from the selected parser
-  S_rs      SGLang stream parser output diverges from the selected parser
-  ?         suffix means the divergent block has no `explanation:` yet
-        (research-needed; we observed it but haven't classified it)
-  !         suffix means the parser has `error: <substring>` (expected to crash)
-  Combined markers, for example V_pbS_rb, mean multiple implementations diverge
+Per-cell status semantics:
+  =     every compared parser matches the Dynamo baseline (`expected.dynamo_v1` batch
+        / `expected.dynamo_v2` stream)
+  ↯     the selected parser leaks tool-call markup into the visible `normal_text`
+  ?     the divergence has no `explanation:` yet (research-needed)
+  !     the parser has `error: <substring>` (expected to crash)
+  ✗     the parser ran but failed to parse
   ·     Dynamo Rust-only fixture; peer blocks are unavailable or not captured
   n/a   family/case doesn't apply
   —     no fixture entry exists for this family/case yet
@@ -64,39 +52,32 @@ import copy
 import datetime
 import functools
 import html as html_lib
+import importlib
 import json
 import os
 import re
 import subprocess
 import sys
-import tempfile
 import zoneinfo
 from pathlib import Path
 from typing import Any
 
 import yaml
-# PERF: this render loads thousands of fixture YAMLs (the stream version-status map
-# re-loads every peer version); PyYAML's pure-Python SafeLoader dominates the wall
-# clock. Route safe_load through libyaml's CSafeLoader (identical result, ~15x faster)
-# when the C extension is present. fixtures.py / markers.py call `yaml.safe_load` at
-# call time, so patching the module here covers them too.
-if hasattr(yaml, "CSafeLoader"):
-    yaml.safe_load = lambda _s, _loader=yaml.CSafeLoader: yaml.load(_s, Loader=_loader)
+import yaml_fast  # noqa: F401 — routes safe_load/safe_dump through libyaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from tests.parity import common
-from tests.parity.common import TOP_N_TOOL_CALLING_FAMILIES as TOP_N_FAMILIES
-from tests.parity.common import (
+from tables import common
+from tables.common import TOP_N_TOOL_CALLING_FAMILIES as TOP_N_FAMILIES
+from tables.common import (
     linkify_text_html,
     parity_cell_class,
 )
-from tests.parity.markup import (
+from tables.markup import (
     colorize_markup,
     colorize_stream_deltas,
     declared_markers,
 )
-from tests.parity.reasoning import table as reasoning_table
-from tests.parity.toolcalling import table as toolcalling_table
+from tables.reasoning import table as reasoning_table
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = REPO_ROOT / "tests/parity/toolcalling/fixtures"
@@ -158,10 +139,7 @@ from markers import (  # noqa: E402,F401
     _norm_calls,
     _normalize_impl_mapping,
     _overview_status,
-    _parity_marker,
     _parser_marker,
-    _selected_parity_marker,
-    _selected_parity_suffix,
     _sob_calls_consistent,
     _sob_cell_text,
     _sob_status,
@@ -259,8 +237,7 @@ def _display_path(path: Path, artifact_root: Path) -> str:
         return path.as_posix()
 
 
-# Destination-aware link resolution lives in tests.parity.common
-# (`set_links` / `LINKS`), shared by the v1 PARITY and v2 CONFORMANCE generators.
+# Destination-aware link resolution lives in tables.common (`set_links` / `LINKS`).
 
 
 _VISIBLE_CONFORMANCE_REPLACEMENTS = (
@@ -374,6 +351,8 @@ def cell_for(
         )
         if kind == "div":
             parts.append(f"{letter}?" if unknown else letter)
+        elif kind == "exception":
+            parts.append(f"{letter}✗")
         elif kind == "err":
             parts.append(f"{letter}!")
 
@@ -857,7 +836,7 @@ def _peer_version_items(versions: dict[str, str]) -> list[tuple[str, str]]:
 # --- per-impl version snapshots for the TC v1 (batch) tab -----------------------
 # Version dirs use legacy impl prefixes (dynamo/vllm/sglang); map to the canonical
 # batch impl keys the cells + radios use. Discovery/slug/sort helpers are shared
-# with the parity page via toolcalling_table.
+# with the parity page via fixtures.
 _VERSION_LEGACY_TO_CANON = {
     "dynamo_v1": "dynamo_v1",
     "dynamo_v2": "dynamo_v2",
@@ -879,12 +858,32 @@ _IMPL_VERSION_RADIO_LABEL = {
 
 def _batch_impl_versions() -> dict[str, list[str]]:
     """Legacy-impl -> versions (ascending) for impls present on the batch tab."""
-    discovered = toolcalling_table._impl_versions()
+    discovered = fixtures._impl_versions()
     return {
         legacy: vers
         for legacy, vers in discovered.items()
         if _VERSION_LEGACY_TO_CANON.get(legacy) in BATCH_IMPL_KEYS
     }
+
+
+def _resolver_module(name: str):
+    """Import a fixture resolver from the repo's conformance/utils/src.
+
+    The resolvers are not part of the staged tree, so their directory is APPENDED to
+    sys.path — never prepended — so the staged copies of fixtures/markers/tables keep
+    priority over the repo-side originals sitting beside the resolvers."""
+    src_dir = str(fixtures._RESOLVE_SRC_DIR)
+    if src_dir not in sys.path:
+        sys.path.append(src_dir)
+    return importlib.import_module(name)
+
+
+@functools.lru_cache(maxsize=None)
+def _source_corpus(root_str: str) -> dict:
+    """Parse a versioned fixture corpus ONCE, for every version selection resolved
+    out of it. Each render resolves ~9 batch + ~11 stream selections; re-reading all
+    ~1700 source files per selection was the single largest cost in the render."""
+    return _resolver_module("fixture_corpus").load_corpus(Path(root_str))
 
 
 def _batch_version_status_map() -> dict[tuple[str, str], dict[str, dict[str, str]]]:
@@ -896,35 +895,29 @@ def _batch_version_status_map() -> dict[tuple[str, str], dict[str, dict[str, str
     impl_versions = _batch_impl_versions()
     if not impl_versions:
         return {}
-    resolver = toolcalling_table._RESOLVE_SRC_DIR / "resolve_fixtures.py"
-    src = toolcalling_table._SRC_FIXTURES
+    resolver = fixtures._RESOLVE_SRC_DIR / "resolve_fixtures.py"
+    src = fixtures._SRC_FIXTURES
     if not resolver.exists() or not src.is_dir():
         return {}
-    pinned = toolcalling_table._pinned_versions(impl_versions)
-    saved_fixtures = fixtures.FIXTURES
+    resolve_batch = _resolver_module("resolve_fixtures").resolve_docs
+    corpus = _source_corpus(str(src))
+    pinned = fixtures._pinned_versions(impl_versions)
     saved_captured = _CAPTURED_WITH_BY_MODE.get("batch")
     result: dict[tuple[str, str], dict[str, dict[str, str]]] = {}
     try:
         for legacy, versions in impl_versions.items():
             canon = _VERSION_LEGACY_TO_CANON[legacy]
             for version in versions:
-                slug = toolcalling_table._version_slug(version)
+                slug = fixtures._version_slug(version)
                 select = [
                     f"{other}-{version if other == legacy else pinned[other]}"
                     for other in impl_versions
                 ]
-                # Resolve under the staged fixtures parent so load_all_cases's
-                # `fp.relative_to(script_dir)` stays valid (script_dir = the module
-                # dir, above the fixtures tree).
-                with tempfile.TemporaryDirectory(dir=str(saved_fixtures.parent)) as tmp:
-                    subprocess.run(
-                        [sys.executable, str(resolver),
-                         "--fixtures-root", str(src),
-                         "--out", tmp, "--select", *select],
-                        check=True, capture_output=True,
-                    )
-                    fixtures.FIXTURES = Path(tmp)
-                    cases, _labels = load_all_cases("batch")
+                # Resolve in memory and read the docs directly: this map only needs
+                # each case's status/block/marker, so staging the tree to a tempdir
+                # just to parse it straight back was pure overhead.
+                docs, _folded = resolve_batch(src, select, corpus=corpus)
+                cases, _labels = load_all_cases("batch", docs=docs)
                 for key, case in cases.items():
                     block = _impl_get(case.get("expected") or {}, canon)
                     result.setdefault(key, {}).setdefault(canon, {})[slug] = {
@@ -932,12 +925,9 @@ def _batch_version_status_map() -> dict[tuple[str, str], dict[str, dict[str, str
                         "block": block,
                         "version": version,
                         "marker": _parser_marker(case, canon),
-                        "parity_marker": _parity_marker(
-                            case, canon, BATCH_IMPL_KEYS, _BATCH_MODE_MARKER
-                        ),
                     }
     finally:
-        fixtures.FIXTURES = saved_fixtures
+        # load_all_cases stamps this per call; put the pinned render's value back.
         if saved_captured is not None:
             _CAPTURED_WITH_BY_MODE["batch"] = saved_captured
     return result
@@ -1033,6 +1023,36 @@ def _clean_version(v: object) -> str | None:
     return token if re.match(r"\d", token) else None
 
 
+def _candidate_name_key(label: str) -> str:
+    """Parser name for ordering: the display label minus its trailing version token and
+    "(mode)" suffix. "vLLM Rust 0.25.1 (stream)" -> "vllm rust". Sorting candidates on
+    this puts PARSERS alphabetically (Dynamo < SGLang < vLLM Python < vLLM Rust)."""
+    base = re.sub(r"\s*\([^)]*\)\s*$", "", label)   # drop "(batch)"/"(stream)"/"(jail+batch)"
+    base = re.sub(r"\s+\d[\w.+]*$", "", base)          # drop the trailing version token
+    return base.lower()
+
+
+# `+` is part of a version token: change-scoped captures like `0.1.24+pr163` are
+# supported (test_model.py), and excluding `+` made the whole regex fail to match, so
+# such a candidate sorted as version-less — LAST instead of first.
+_CANDIDATE_VERSION_RE = re.compile(r"\s(\d[\w.+]*)\s*(?:\([^)]*\))?\s*$")
+
+
+def _sort_candidates(items: list[dict]) -> list[dict]:
+    """Order compare candidates PARSER-alphabetically with versions LATEST-FIRST within
+    each parser. Two stable passes: version DESC first, then a stable name sort that
+    groups by parser and preserves the version-desc order inside each group. The version
+    pass runs EXPLICITLY — one call site (_cell_candidate_meta over __ver_status) feeds
+    versions ascending, so relying on a stable name-sort alone would keep them ascending.
+    Reference (bucket A) stays first because Dynamo sorts ahead of the peers. Keys and
+    default_bucket flags are untouched; only display order moves."""
+    def _ver_key(it: dict):
+        m = _CANDIDATE_VERSION_RE.search(it["label"])
+        return fixtures._version_sort_key(m.group(1)) if m else ()
+    ordered = sorted(items, key=_ver_key, reverse=True)
+    return sorted(ordered, key=lambda it: _candidate_name_key(it["label"]))
+
+
 def _candidate_items() -> list[dict[str, str]]:
     """Ordered comparison candidates for the batch tab: Dynamo, then vLLM/SGLang —
     within each engine versions run LATEST-FIRST (0.24.0 before 0.23.0). Each:
@@ -1045,7 +1065,7 @@ def _candidate_items() -> list[dict[str, str]]:
     first = True
     for canon in ("dynamo_v1", "vllm_python", "sglang_python"):
         for v in reversed(impl_versions.get(canon, [])):
-            slug = toolcalling_table._version_slug(v)
+            slug = fixtures._version_slug(v)
             if first:
                 bucket = "A"
                 first = False
@@ -1060,7 +1080,7 @@ def _candidate_items() -> list[dict[str, str]]:
                 "label": _full_label(canon, v, "batch"),
                 "default_bucket": bucket,
             })
-    return out
+    return _sort_candidates(out)
 
 
 # --- per-impl version snapshots for the TC v2 (stream) tab ----------------------
@@ -1075,7 +1095,7 @@ def _candidate_items() -> list[dict[str, str]]:
 # _common.sh exports CONFORMANCE_FIXTURES_ROOT. Without this the stream tab's versioned
 # candidates come up empty and the Base/Compare parser selector doesn't render.
 _STREAM_SRC = (
-    toolcalling_table._fixtures_cache_root() / "toolcalling/fixtures-stream-v2"
+    fixtures._fixtures_cache_root() / "toolcalling/fixtures-stream-v2"
 )
 
 
@@ -1107,7 +1127,7 @@ def _stream_impl_versions() -> dict[str, list[str]]:
             # to the base so only real versions become compare columns.
             found.setdefault(impl, []).append(_base_stream_version(ver))
     for impl in list(found):
-        found[impl] = sorted(set(found[impl]), key=toolcalling_table._version_sort_key)
+        found[impl] = sorted(set(found[impl]), key=fixtures._version_sort_key)
     order = ("dynamo_v1", "dynamo_v2", "vllm_rust", "vllm_python", "sglang_python")
     return {i: found[i] for i in order if i in found}
 
@@ -1123,17 +1143,20 @@ def _stream_candidate_items() -> list[dict[str, str]]:
     for impl in ("dynamo_v1", "dynamo_v2", "vllm_rust", "vllm_python", "sglang_python"):
         # Within an engine, versions run LATEST-FIRST (0.24.0 before 0.23.0).
         for v in reversed(impl_versions.get(impl, [])):
-            slug = toolcalling_table._version_slug(v)
+            slug = fixtures._version_slug(v)
             if impl == BASELINE_STREAM_IMPL and v == latest.get(impl):
                 bucket = "A"
             else:
+                # Older captures stay SELECTABLE but unchecked. Auto-comparing every
+                # version turns on a wall of columns the moment Detailed is pressed;
+                # the reader picks the one build they want to diff against.
                 bucket = "C"
             out.append({
                 "key": f"{impl}-{slug}",
                 "label": _full_label(impl, v, "stream"),
                 "default_bucket": bucket,
             })
-    return out
+    return _sort_candidates(out)
 
 
 @functools.lru_cache(maxsize=1)
@@ -1166,15 +1189,28 @@ def _stream_divergence_note(family: str, case_id: str, impl: str) -> str | None:
 
 
 def _stream_version_families(impl: str, version: str) -> set[str] | None:
-    """Families the `<impl>-<version>` stream fixture dir actually holds — the
-    authoritative coverage for that parser build. `None` if the dir is absent (don't
-    gate). Used to mark the Dynamo v2 stream candidate `na` on families its parser
-    doesn't implement, since the dir only contains the families it produced output
-    for (dynamo_v2-0.1.11 = the v2-supported handful; dynamo_v1-3.0.0 = all)."""
-    d = _STREAM_SRC / f"{impl}-{version}"
-    if not d.is_dir():
+    """Families covered after resolving `<impl>` through `version`.
+
+    The lowest version is the full anchor; higher directories may contain only
+    changed cases. Coverage therefore accumulates through the selected version just
+    as `resolve_stream_fixtures.py` accumulates their outputs. `None` means no version
+    directory was found, so callers should not gate the candidate.
+    """
+    prefix = f"{impl}-"
+    target = fixtures._version_sort_key(version)
+    found = False
+    families: set[str] = set()
+    if not _STREAM_SRC.is_dir():
         return None
-    return {p.name for p in d.iterdir() if p.is_dir()}
+    for directory in _STREAM_SRC.iterdir():
+        if not directory.is_dir() or not directory.name.startswith(prefix):
+            continue
+        candidate_version = directory.name[len(prefix) :]
+        if fixtures._version_sort_key(candidate_version) > target:
+            continue
+        found = True
+        families.update(path.name for path in directory.iterdir() if path.is_dir())
+    return families if found else None
 
 
 def _parser_ni_map() -> dict:
@@ -1190,7 +1226,7 @@ def _parser_ni_map() -> dict:
     fams = sorted(_stream_version_families(BASELINE_STREAM_IMPL, v2ver) or [])
     if not fams:
         return {}
-    slug = toolcalling_table._version_slug(v2ver)
+    slug = fixtures._version_slug(v2ver)
     entry = {"label": _full_label(BASELINE_STREAM_IMPL, v2ver, "stream"), "families": fams}
     # The v2 candidate key differs by tab: "<impl>-s-<slug>" on the batch
     # (stream-on-batch) tab, bare "<impl>-<slug>" on the stream tab.
@@ -1211,35 +1247,36 @@ def _stream_version_status_map() -> dict[tuple[str, str], dict[str, dict[str, di
     impl_versions = _stream_impl_versions()
     if not impl_versions:
         return {}
-    resolver = toolcalling_table._RESOLVE_SRC_DIR / "resolve_stream_fixtures.py"
+    resolver = fixtures._RESOLVE_SRC_DIR / "resolve_stream_fixtures.py"
     if not resolver.exists() or not _STREAM_SRC.is_dir():
         return {}
+    resolve_stream = _resolver_module("resolve_stream_fixtures").resolve_docs
+    corpus = _source_corpus(str(_STREAM_SRC))
     overlaid = {i: vs for i, vs in impl_versions.items() if len(vs) > 1}
     pinned = {i: vs[-1] for i, vs in impl_versions.items()}
-    saved_fixtures = fixtures.FIXTURES
     saved_captured = _CAPTURED_WITH_BY_MODE.get("streamv2")
     result: dict[tuple[str, str], dict[str, dict[str, dict]]] = {}
 
     def _raw_chunk_counts(impl, version):
         """{(family, case_id): n_chunks} straight from the <impl>-<version> dir docs.
         The resolver pads a folded case to the input chunk count, so alignment
-        (did this capture record per-input-chunk timing?) is only visible here."""
+        (did this capture record per-input-chunk timing?) is only visible here.
+        Read out of the shared corpus — these are the same source docs the fold
+        already parsed."""
         counts: dict[tuple[str, str], int] = {}
-        vdir = _STREAM_SRC / f"{impl}-{version}"
-        if vdir.is_dir():
-            for fp in vdir.glob("*/*.yaml"):
-                try:
-                    doc = yaml.safe_load(fp.read_text()) or {}
-                except Exception:
-                    continue
-                fam = doc.get("family") or fp.parent.name
-                for cid, vc in (doc.get("cases") or {}).items():
-                    if isinstance(vc, dict) and isinstance(vc.get("chunks"), list):
-                        counts[(fam, cid)] = len(vc["chunks"])
+        vdir_name = f"{impl}-{version}"
+        for (top, family, _name), doc in corpus.items():
+            if top != vdir_name:
+                continue
+            doc = doc or {}
+            fam = doc.get("family") or family
+            for cid, vc in (doc.get("cases") or {}).items():
+                if isinstance(vc, dict) and isinstance(vc.get("chunks"), list):
+                    counts[(fam, cid)] = len(vc["chunks"])
         return counts
 
     def _record(cases, impl, version):
-        slug = toolcalling_table._version_slug(version)
+        slug = fixtures._version_slug(version)
         raw_counts = _raw_chunk_counts(impl, version)
         # Dynamo v1 and v2 are DIFFERENT parsers: v2 (dynamo_v2-0.1.11)
         # implements only a handful of families, while the v1 jail
@@ -1294,17 +1331,12 @@ def _stream_version_status_map() -> dict[tuple[str, str], dict[str, dict[str, di
             }
 
     def _resolve_and_load(select):
-        # Resolve under the staged fixtures parent so load_all_cases's
-        # `fp.relative_to(script_dir)` stays valid (script_dir is above the tree).
-        with tempfile.TemporaryDirectory(dir=str(saved_fixtures.parent)) as tmp:
-            subprocess.run(
-                [sys.executable, str(resolver),
-                 "--fixtures-root", str(_STREAM_SRC),
-                 "--out", tmp, "--select", *select],
-                check=True, capture_output=True,
-            )
-            fixtures.FIXTURES = Path(tmp)
-            cases, _labels = load_all_cases("streamv2")
+        # Resolve in memory and read the docs directly. Staging each selection to a
+        # tempdir only to parse it straight back was the bulk of the render's time.
+        # The docs are stream-only, so load_all_cases finds no batch docs to attach
+        # batch_expected from — same as when the staged tree held stream files alone.
+        docs, _folded = resolve_stream(_STREAM_SRC, select, corpus=corpus)
+        cases, _labels = load_all_cases("streamv2", docs=docs)
         return cases
 
     try:
@@ -1322,7 +1354,7 @@ def _stream_version_status_map() -> dict[tuple[str, str], dict[str, dict[str, di
                 cases = _resolve_and_load(select)
                 _record(cases, impl, v)
     finally:
-        fixtures.FIXTURES = saved_fixtures
+        # load_all_cases stamps this per call; put the pinned render's value back.
         if saved_captured is not None:
             _CAPTURED_WITH_BY_MODE["streamv2"] = saved_captured
     return result
@@ -1370,20 +1402,20 @@ def _merged_candidate_items() -> list[dict[str, str]]:
     for c in _candidate_items():
         impl = c["impl"]
         out.append({
-            "key": f"{impl}-b-{c['slug']}",
+            "key": f"{impl}-b-{c['slug']}", "impl": impl, "version": c["version"],
             "label": _full_label(impl, c['version'], "batch"),
             "default_bucket": c["default_bucket"],
         })
     stream_versions = _stream_on_batch_versions()
     for impl in STREAM_IMPL_KEYS:
         ver = stream_versions.get(impl)
-        slug = toolcalling_table._version_slug(ver) if ver else ""
+        slug = fixtures._version_slug(ver) if ver else ""
         out.append({
-            "key": f"{impl}-s-{slug}" if slug else f"{impl}-s",
+            "key": f"{impl}-s-{slug}" if slug else f"{impl}-s", "impl": impl, "version": ver,
             "label": _full_label(impl, ver, "stream"),
             "default_bucket": "C",
         })
-    return out
+    return _sort_candidates(out)
 
 
 def _attach_merged_cmp(cases: dict) -> None:
@@ -1402,7 +1434,7 @@ def _attach_merged_cmp(cases: dict) -> None:
             # Within an engine, LATEST version first (matches the compare bar).
             entries = sorted(
                 (ver_status.get(impl) or {}).items(),
-                key=lambda kv: toolcalling_table._version_sort_key(str(kv[1].get("version") or "0")),
+                key=lambda kv: fixtures._version_sort_key(str(kv[1].get("version") or "0")),
                 reverse=True,
             )
             for slug, info in entries:
@@ -1418,7 +1450,7 @@ def _attach_merged_cmp(cases: dict) -> None:
             expected = _expected(sob)
             for impl in STREAM_IMPL_KEYS:
                 ver = stream_versions.get(impl)
-                slug = toolcalling_table._version_slug(ver) if ver else ""
+                slug = fixtures._version_slug(ver) if ver else ""
                 items.append({
                     "key": f"{impl}-s-{slug}" if slug else f"{impl}-s",
                     "label": _full_label(impl, ver, "stream"),
@@ -1467,6 +1499,9 @@ def _compute_stats(
             s["real"] += 1
             if text == "=":
                 s["parity"] += 1
+            # `text` here is the internal compact agreement string from `cell_for` /
+            # `_stream_xeng_marker` (never shown to users). A bare Dynamo-only token —
+            # `·`, or the Dynamo batch/stream sentinel — buckets as dynamo_only.
             elif text == "·" or text in {"D", "D_rb", "D_rs"}:
                 s["dynamo_only"] += 1
             elif "!" in text:
@@ -1487,9 +1522,9 @@ def _stream_on_batch_expected(overlay_case: dict, has_batch_text: bool = True) -
     The overlay records each engine's STREAMING parse of the v1 batch text. Some
     overlay rows are taxonomy placeholders with no batch `model_text`; render
     those as structural unavailability instead of claiming the parser is missing.
-    Peer outputs are tagged with a `reason` so the
-    conformance marker reads as an intentional divergence (`V_ps`/`S_rs`), not
-    research-needed (`V_ps?`/`S_rs?`) — text-vs-token streaming differs by design.
+    Peer outputs are tagged with a `reason` so the divergence reads as intentional
+    (a documented difference), not research-needed — text-vs-token streaming differs
+    by design.
     """
     expected: dict = {}
     overlay_case = _normalize_impl_mapping(overlay_case)
@@ -1633,7 +1668,8 @@ def _load_panel_cases(
     no_vllm, no_sglang = _derive_no_peer_sets(cases)
     top_n, others = _build_display_groups(cases, labels)
     # The streamv2 tab uses the stream comparison: color = stream-vs-own-batch,
-    # conformance marker = cross-engine stream agreement (`Y_s`).
+    # agreement = cross-engine stream agreement (each engine's stream parser vs the
+    # others').
     comparison = "stream_vs_batch" if mode == "streamv2" else "cross_engine"
     return {
         "mode": mode,
@@ -1770,6 +1806,8 @@ def _output_block_model(blk: object) -> dict | None:
     out: dict[str, Any] = {}
     if "unavailable" in blk:
         out["unavailable"] = blk["unavailable"]
+    if "exception" in blk:
+        out["exception"] = blk["exception"]
     if "error" in blk:
         out["error"] = blk["error"]
     if "calls" in blk or "normal_text" in blk:
@@ -1802,14 +1840,16 @@ def _cell_candidate_meta(case: dict, output_kind: str) -> tuple[dict, list[dict]
         # _full_label still maps dynamo_v1 on stream data to "(jail+batch)".
         for impl in ("dynamo_v1", "dynamo_v2", "vllm_rust", "vllm_python", "sglang_python"):
             for slug, info in (ver_status.get(impl) or {}).items():
-                meta.append({"key": f"{impl}-{slug}",
+                meta.append({"key": f"{impl}-{slug}", "impl": impl,
                              "label": _full_label(impl, info["version"], output_kind),
                              "version": info["version"], "block_raw": info["block"]})
     else:
         expected = _expected(case)
         for impl in STREAM_IMPL_KEYS:
-            meta.append({"key": impl, "label": f"{_IMPL_DISPLAY[impl]} {output_kind}",
+            meta.append({"key": impl, "impl": impl,
+                         "label": f"{_IMPL_DISPLAY[impl]} {output_kind}",
                          "version": _v2_display_version(impl), "block_raw": _impl_get(expected, impl)})
+    meta = _sort_candidates(meta)
     cmp_blocks = {m["key"]: m["block_raw"] for m in meta}
     for m in meta:
         blk = m.pop("block_raw")
@@ -2169,14 +2209,33 @@ def _load_unified_fixtures(base: Path):
 
     inputs = _read_dir("inputs")
     golden = _read_dir("golden")
-    engine_dirs = {}  # impl -> (dirname, version)
+    # impl -> [(version, dirname)] ascending. Dynamo keeps EVERY capture so the tab can
+    # compare one parser build against another; a dict keyed by impl silently dropped
+    # all but the last dir, which is why only one Dynamo column could ever render.
+    # `sorted()` alone is lexicographic (0.1.9 > 0.1.10), so sort on the version key.
+    engine_versions: dict[str, list[tuple[str, str]]] = {}
     for d in sorted(base.iterdir()):
         if not d.is_dir() or d.name in ("inputs", "golden"):
             continue
         m = re.match(r"^([a-z0-9_]+)-(\d.*)$", d.name)
         if m:
-            engine_dirs[m.group(1)] = (d.name, m.group(2))
+            engine_versions.setdefault(m.group(1), []).append((m.group(2), d.name))
+    for impl in engine_versions:
+        # `_version_sort_key` reads only the leading digits, so `0.1.24+pre163` ties with
+        # `0.1.24`. Break the tie so a `+tag` capture sorts BEFORE the plain release it
+        # qualifies: the tag marks a code state within that version (a pre-merge branch
+        # point), while the unadorned version is the released build. Without this the
+        # tagged capture wins the tie and becomes the reference, which would star the OLD
+        # parser and quietly measure everything against it.
+        engine_versions[impl].sort(
+            key=lambda vd: (fixtures._version_sort_key(vd[0]), "+" not in vd[0])
+        )
+    # Peers still resolve to their single latest dir; only Dynamo fans out per version.
+    engine_dirs = {impl: (vs[-1][1], vs[-1][0]) for impl, vs in engine_versions.items()}
     engine_cases = {impl: _read_dir(dirname) for impl, (dirname, _v) in engine_dirs.items()}
+    dynamo_by_ver = {
+        ver: _read_dir(dirname) for ver, dirname in engine_versions.get("dynamo_v2", [])
+    }
 
     cases = []
     caps = {"vllm_python": {}, "vllm_rust": {}, "sglang_python": {}}
@@ -2187,13 +2246,32 @@ def _load_unified_fixtures(base: Path):
         ddoc = engine_cases.get("dynamo_v2", {}).get((fam, key), {})
         in_chunks = inp.get("chunks") or []
         dyn_chunks = ddoc.get("chunks") or []
+        raw_init = inp.get("init") or {}
         cases.append({
             "id": cid, "scenario": scenario, "family": fam,
             "description": inp.get("description", ""),
             "policy": inp.get("policy") or [], "policy_tags": inp.get("policy") or [],
+            "init": {
+                "starting_state": raw_init.get("starting_state") or "None",
+                "tool_output_mode": raw_init.get("tool_output_mode") or "Native",
+                "named_tool": raw_init.get("named_tool"),
+            },
+            "finish_reason": inp.get("finish_reason") or "stop",
             "input": inp.get("input", ""),
             "golden": gdoc.get("assembled") or [],
             "dynamo": ddoc.get("assembled") or [],
+            # Per-capture payloads, latest included. A version that never recorded this
+            # case is ABSENT here rather than empty: an older capture predating the case
+            # has no opinion about it, and scoring [] against golden would invent a
+            # divergence the parser never produced.
+            "dynamo_by_ver": {
+                ver: {
+                    "assembled": (vdoc.get("assembled") or []),
+                    "chunks": [c.get("expected") or [] for c in (vdoc.get("chunks") or [])],
+                }
+                for ver, vcases in dynamo_by_ver.items()
+                if (vdoc := vcases.get((fam, key))) is not None
+            },
             "dynamo_verdict": None, "vllm_verdict": None, "vllm_note": None,
             "chunks": [
                 {"delta_text": ic.get("delta_text", ""),
@@ -2214,6 +2292,8 @@ def _load_unified_fixtures(base: Path):
                     "parser": edoc.get("parser"),
                 }
     versions = {impl: v for impl, (_d, v) in engine_dirs.items()}
+    # Ascending; the tab makes the last one the reference and the rest compare-on.
+    versions["dynamo_v2_all"] = [v for v, _d in engine_versions.get("dynamo_v2", [])]
     return cases, caps, versions
 
 
@@ -2249,12 +2329,14 @@ def _unified_tab_model(artifact_root: Path, hrefs: dict) -> dict | None:
     scenarios: list[str] = []
     families: list[str] = []
     scn_desc: dict[str, str] = {}
+    scn_init: dict[str, dict] = {}
     by_key: dict[tuple[str, str], dict] = {}
     for c in cases:
         s, f = c["scenario"], c["family"]
         if s not in scenarios:
             scenarios.append(s)
             scn_desc[s] = c["description"]
+            scn_init[s] = c.get("init")
         if f not in families:
             families.append(f)
         by_key[(f, s)] = c
@@ -2275,7 +2357,10 @@ def _unified_tab_model(artifact_root: Path, hrefs: dict) -> dict | None:
     for s in ordered:
         g, sub = _tax(s)
         columns.append({"sub": s, "group_key": f"unified_g{g}", "band": _band(g),
-                        "label": f"{g}.{sub}", "desc": scn_desc.get(s, "")})
+                        "label": f"{g}.{sub}", "desc": scn_desc.get(s, ""),
+                        # The parser knobs are declared per SCENARIO, so a column
+                        # header can show exactly what its cells ran under.
+                        "init": scn_init.get(s)})
     column_groups = []
     seen_groups = []
     for s in ordered:
@@ -2298,7 +2383,12 @@ def _unified_tab_model(artifact_root: Path, hrefs: dict) -> dict | None:
     # Names follow the convention <Engine> [version] (<parser/mode>). The vLLM Rust
     # column's per-family variant (UnifiedParser for gemma4, CombinedParser otherwise)
     # can't fit one fixed column label, so it's shown per family in the tooltip.
-    dynamo_ver_label = _dynamo_v2_version() or "0.1.x"
+    # THIS tab's own capture version. It used to borrow _dynamo_v2_version(), which reads
+    # the STREAM tree (toolcalling/fixtures-stream-v2) — a different tree on a different
+    # release cadence — so the column was labelled with a version that did not produce
+    # these rows (0.1.23 on 0.1.24 data).
+    dynamo_all_vers = _vers.get("dynamo_v2_all") or []
+    dynamo_ver_label = (dynamo_all_vers[-1] if dynamo_all_vers else None) or "0.1.x"
     # Per-family mixture now, exactly like vLLM Rust: the native UnifiedParser where
     # one exists (qwen3), the v1-reasoning + v2-tool split everywhere else.
     dynamo_label = f"Dynamo v2 Rust {dynamo_ver_label} (stream, Combined & Unified)"
@@ -2312,17 +2402,29 @@ def _unified_tab_model(artifact_root: Path, hrefs: dict) -> dict | None:
         # green. See conformance_view.compareBarHtml (golden's hidden ref radio is dropped
         # when an engine is the default REF).
         _cand("dynamo", dynamo_label, "A"),  # Reference (default, starred)
-        _cand("golden", "GOLDEN (oracle)", "B"),  # fixed NΔ baseline, not the base
-        _cand("vllm", vllm_label, "B"),  # Compare-on by default
+        # Only the Reference is on by default — same rule as the stream and batch tabs.
+        # Reset reloads at these defaults, so anything B here comes back checked every
+        # time the reader clears the board, which reads as the page re-selecting itself.
+        _cand("golden", "GOLDEN (oracle)", "C"),  # fixed NΔ baseline, not the base
+        _cand("vllm", vllm_label, "C"),
     ]
+    # Older Dynamo captures, newest-first, each its own clickable column — UNCHECKED,
+    # so pressing Detailed does not switch on every historical build at once. The point
+    # is that the version is THERE to click, not that it is compared by default.
+    # impl="dynamo" groups them under the one Dynamo engine block of the compare bar.
+    for v in reversed(dynamo_all_vers[:-1]):
+        pc = _cand(f"dynamo@{v}", f"Dynamo v2 Rust {v} (stream, Combined & Unified)", "C")
+        pc["impl"] = "dynamo"
+        pc["version"] = v
+        candidates.append(pc)
     if vrust_live:
         # impl="vllm" groups it under the vLLM engine column of the compare bar (a second
         # row next to vLLM Python); key stays "vllm_rust" for the cmp/chunk/chart lookups.
-        rc = _cand("vllm_rust", vrust_label, "B")
+        rc = _cand("vllm_rust", vrust_label, "C")
         rc["impl"] = "vllm"
         candidates.append(rc)
     if sgl_live:
-        candidates.append(_cand("sglang", f"SGLang Python {sgl_ver_label} (stream, Combined)", "B"))
+        candidates.append(_cand("sglang", f"SGLang Python {sgl_ver_label} (stream, Combined)", "C"))
     _TODO = ("TODO: adopt a unified parser for this family (Dynamo v2 is moving to a "
              "per-family mixture — native unified where available, split elsewhere). "
              "Today's split parses ALL reasoning first, so reasoning between/after tool "
@@ -2384,25 +2486,49 @@ def _unified_tab_model(artifact_root: Path, hrefs: dict) -> dict | None:
                 sverd = "ERROR" if sgl_err else _unified_classify(f, gold, sgl_events)
                 ssig = (_sig(sgl_events) ^ 0xE44) if sgl_err else _sig(sgl_events)
             cmp = {
-                "golden": {"sig": gsig, "leak": 0, "na": 0},
-                "dynamo": {"sig": dsig, "leak": 1 if dverd == "LEAK" else 0, "na": 0},
-                "vllm": {"sig": vsig, "leak": 1 if vverd == "LEAK" else 0, "na": 0},
+                "golden": markers.cmp_entry(gsig),
+                "dynamo": markers.cmp_entry(dsig, leak=1 if dverd == "LEAK" else 0),
+                "vllm": markers.cmp_entry(vsig, leak=1 if vverd == "LEAK" else 0),
             }
             if vrust_events is not None:
-                cmp["vllm_rust"] = {"sig": rsig, "leak": 1 if rverd == "LEAK" else 0, "na": 0}
+                cmp["vllm_rust"] = markers.cmp_entry(
+                    rsig, leak=1 if rverd == "LEAK" else 0, err=1 if vrust_err else 0
+                )
             if sgl_events is not None:
-                cmp["sglang"] = {"sig": ssig, "leak": 1 if sverd == "LEAK" else 0, "na": 0}
+                cmp["sglang"] = markers.cmp_entry(
+                    ssig, leak=1 if sverd == "LEAK" else 0, err=1 if sgl_err else 0
+                )
+            # Older Dynamo builds, scored against GOLDEN exactly like the latest one, so a
+            # cell that changed between builds shows a real NΔ instead of a styling hint.
+            prev_by_ver = c.get("dynamo_by_ver") or {}
+            prev_chunks_by_ver = {}
+            for pv in dynamo_all_vers[:-1]:
+                pdoc = prev_by_ver.get(pv)
+                if pdoc is None:
+                    # Capture predates this case: n/a, not a divergence.
+                    cmp[f"dynamo@{pv}"] = markers.cmp_entry(0, na=1)
+                    prev_chunks_by_ver[pv] = []
+                    continue
+                pchunks = pdoc.get("chunks") or []
+                pevents = _assemble_stream(pchunks)
+                pverd = _unified_classify(f, gold, pevents)
+                cmp[f"dynamo@{pv}"] = markers.cmp_entry(
+                    _sig(pevents), leak=1 if pverd == "LEAK" else 0
+                )
+                prev_chunks_by_ver[pv] = pchunks
             desc = c["description"]
             if c.get("policy_tags"):
                 desc = f"{desc}  [policy: {', '.join(c['policy_tags'])}]"
-            chunk_rows = [
-                {"delta_text": ch["delta_text"], "finish_reason": None,
-                 "expected": {"dynamo": ch.get("dynamo") or [],
-                              "vllm": (vllm_chunks[i] if i < len(vllm_chunks) else []),
-                              "vllm_rust": (vrust_chunks[i] if i < len(vrust_chunks) else []),
-                              "sglang": (sgl_chunks[i] if i < len(sgl_chunks) else [])}}
-                for i, ch in enumerate(c.get("chunks") or [])
-            ]
+            chunk_rows = []
+            for i, ch in enumerate(c.get("chunks") or []):
+                expected = {"dynamo": ch.get("dynamo") or [],
+                            "vllm": (vllm_chunks[i] if i < len(vllm_chunks) else []),
+                            "vllm_rust": (vrust_chunks[i] if i < len(vrust_chunks) else []),
+                            "sglang": (sgl_chunks[i] if i < len(sgl_chunks) else [])}
+                for pv, pchunks in prev_chunks_by_ver.items():
+                    expected[f"dynamo@{pv}"] = pchunks[i] if i < len(pchunks) else []
+                chunk_rows.append({"delta_text": ch["delta_text"],
+                                   "finish_reason": None, "expected": expected})
             reasons = []
             if dverd in ("MERGE", "ORDER"):
                 reasons.append({
@@ -2425,6 +2551,8 @@ def _unified_tab_model(artifact_root: Path, hrefs: dict) -> dict | None:
             tooltip = {
                 "head": f'UNIFIED.{g_num}.{g_sub} ({s}) — {f}',
                 "description": desc,
+                "init": c.get("init"),
+                "finish_reason": c.get("finish_reason"),
                 # `family` here selects the GRAMMAR the colorizer types markup with,
                 # so it must be the marker-registry family, not the corpus one.
                 "input": {"kind": "chunks", "text": c["input"], "chunks": chunk_rows,
@@ -2457,7 +2585,22 @@ def _unified_tab_model(artifact_root: Path, hrefs: dict) -> dict | None:
                      "leak": sverd == "LEAK",
                      "block": ({"error": sgl_err} if sgl_err else
                                {"events": sgl_events, "verdict": sverd})},
-                ] if sgl_events is not None else []),
+                ] if sgl_events is not None else []) + [
+                    # One popup column per older Dynamo capture, newest-first. A version
+                    # that never recorded this case says so instead of showing an empty
+                    # event list that reads like the parser produced nothing.
+                    {"key": f"dynamo@{pv}",
+                     "label": f"Dynamo v2 Rust {pv} (stream, Combined & Unified)",
+                     "impl": "dynamo", "version": pv, "parse_mode": "unified",
+                     "leak": bool(cmp.get(f"dynamo@{pv}", {}).get("leak")),
+                     "block": ({"unavailable": f"not captured at {pv} — this case postdates that build"}
+                               if (prev_by_ver.get(pv) is None)
+                               else {"events": _assemble_stream(prev_chunks_by_ver.get(pv) or []),
+                                     "verdict": _unified_classify(
+                                         f, gold,
+                                         _assemble_stream(prev_chunks_by_ver.get(pv) or []))})}
+                    for pv in reversed(dynamo_all_vers[:-1])
+                ],
                 "baseline": None, "reasons": reasons, "dynamo_notes": [], "refs": [],
                 "leak_note": None, "na_note": None,
             }

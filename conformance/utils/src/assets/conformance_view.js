@@ -62,6 +62,16 @@
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
   }
+  // Monospace the things that ARE literals: backtick spans the corpus already
+  // writes (`reasoning/core`), and e2e artifact filenames like
+  // `case-0105-schema_escaped_unicode_string__non-stream-budget_capped.json`,
+  // which otherwise wrap mid-token in prose and read as a sentence.
+  // Runs AFTER escapeHtml, so the input is already inert and this only adds tags.
+  function codeSpans(escaped) {
+    return String(escaped)
+      .replace(/`([^`]+)`/g, '<tt>$1</tt>')
+      .replace(/(^|[\s(])(case-\d{3,}-[A-Za-z0-9_.-]+\.json)/g, '$1<tt>$2</tt>');
+  }
   function escapeAttr(s) { return escapeHtml(s); }
   function num(x) { return String(x == null ? 0 : x); }
 
@@ -184,9 +194,11 @@
 
   function delegatedBuild(e) {
     var t = e.target;
-    // `th.case-sub` carries the per-column grammar popup and builds the same lazy way
-    // a data cell does — without it here, hovering a header would show an empty box.
-    var td = t && t.closest ? t.closest('td.cell[data-ttip-id], th.case-sub[data-ttip-id], th.trow-case[data-ttip-id]') : null;
+    // Anything carrying a `data-ttip-id` builds the same lazy way a data cell does —
+    // headers included, which is why this asks for the attribute rather than listing the
+    // element types that happen to have one today. A list here had already missed
+    // `th.tcol-model`, so hovering a transposed model header showed an empty box.
+    var td = t && t.closest ? t.closest('[data-ttip-id]') : null;
     if (td) { buildTooltipInto(td); }
   }
   // pointerover/focusin/click all bubble, so one document listener covers every
@@ -216,11 +228,16 @@
   }
 
   // --- Output block rendering (mirrors _format_output_block_html) ------------
-  function outputBlock(b, family, ctx) {
+  function outputBlock(b, family, ctx, goldenKinds) {
     if (!b) { return '—'; }
     if (b.unavailable != null) {
       // Prose, not payload: these carry n/a rationale and TODO notes.
       return '<span class="expl">unavailable: ' + escapeHtml(String(b.unavailable)) + '</span>';
+    }
+    if (b.exception != null) {
+      // The parser ran and threw; surface the exception verbatim (e.g. the named
+      // vLLM Rust crate variant `ToolParserError::ParsingFailed (...)`).
+      return 'exception: ' + escapeHtml(String(b.exception));
     }
     if (b.error != null) {
       var e = (typeof b.error === 'string') ? b.error : JSON.stringify(b.error);
@@ -247,7 +264,18 @@
       // A blank line separates the monospaced event stream from the explanation
       // lines (verdict / TODO / note) so they don't read as another event.
       var expl = [];
-      if (b.verdict && b.verdict !== 'MATCH') { expl.push('diverges: ' + escapeHtml(b.verdict)); }
+      if (b.verdict && b.verdict !== 'MATCH') {
+        expl.push('diverges: ' + escapeHtml(b.verdict));
+        // ORDER/MERGE mean every BYTE survived and only the SEQUENCE is wrong.
+        // Naming the class without showing the sequence makes the reader diff
+        // two event lists by eye — so print both orders explicitly.
+        if ((b.verdict === 'ORDER' || b.verdict === 'MERGE') && goldenKinds) {
+          var arrow = ' \u2192 ';
+          var gotKinds = (b.events || []).map(function (ev) { return ev.kind; });
+          expl.push('want: ' + escapeHtml(goldenKinds.join(arrow)));
+          expl.push('got:  ' + escapeHtml(gotKinds.join(arrow)));
+        }
+      }
       if (b.todo) { expl.push(escapeHtml(String(b.todo))); }
       if (b.note) { expl.push(escapeHtml(String(b.note))); }
       if (expl.length) {
@@ -380,6 +408,9 @@
       if (c.key === 'golden') { golden = c; return false; }
       return true;
     });
+    var goldenKinds = golden && golden.block && golden.block.events
+      ? golden.block.events.map(function (ev) { return ev.kind; })
+      : null;
     var header = '';
     cands.forEach(function (c, ci) {
       header += '<th data-cand="' + escapeAttr(c.key) + '" data-cand-order="' + ci + '">'
@@ -418,13 +449,87 @@
       var diverges = c.block && c.block.verdict && c.block.verdict !== 'MATCH';
       fin += '<td data-cand="' + escapeAttr(c.key) + '" data-cand-order="' + ci + '"'
         + (diverges ? ' class="cand-diverge"' : '') + '>'
-        + outputBlock(c.block, family, ctx).replace(/\n/g, '<br>') + '</td>';
+        + outputBlock(c.block, family, ctx, goldenKinds).replace(/\n/g, '<br>') + '</td>';
     });
     fin += '</tr>';
     var inputHdr = golden ? 'input / golden output' : 'input';
     // The table carries class `ttip-chunks` — conformance.js keys the popup grid on it.
     return '<table class="ttip-chunks"><thead><tr><th>' + escapeHtml(inputHdr) + '</th>' + header
       + '</tr></thead><tbody>' + body + fin + '</tbody></table>';
+  }
+
+  // --- Parser configuration bullet list ---------------------------------------
+  // The case description says WHAT the case is; this says HOW the parser was
+  // configured to run it. Every knob is listed on its own line, always — a knob the
+  // case did not set still shows, as `<not specified>` plus the default that applied,
+  // so "not set" and "set to the default" stay distinguishable when reading a popup.
+  //
+  // ONLY real request-scoped parser inputs belong here, i.e. the arguments of
+  // `UnifiedParser::initialize_with_output_mode`. `finish_reason` is deliberately
+  // NOT one: `finish()` takes no argument, so the parser cannot see it (the same is
+  // true of vLLM's parsers) — it is a stream property, not a knob. Listing it here
+  // would claim the parser behaves differently per value, which it does not.
+  // value -> what that value MEANS, so a reader does not have to know the Rust enum.
+  // `None` and `Native` are real `#[default]` variants, NOT absent values — the gloss
+  // says so, because "None" otherwise reads as null/unset.
+  var CONFIG_GLOSS = {
+    starting_state: {
+      'None': 'prompt opened no channel; the model emits its own markers (enum default)',
+      'Reasoning': 'prompt opened reasoning, so the stream begins INSIDE a thought',
+      'Response': 'prompt opened the visible response channel'
+    },
+    tool_output_mode: {
+      'Native': "the model's own tool-call markup (enum default)",
+      'GuidedJson': 'guided decoding emits bare JSON instead of native markup'
+    }
+  };
+
+  var CONFIG_KEYS = [
+    { key: 'starting_state', dflt: 'None', values: ['None', 'Reasoning', 'Response'] },
+    { key: 'tool_output_mode', dflt: 'Native', values: ['Native', 'GuidedJson'] },
+    {
+      key: 'named_tool',
+      dflt: 'null',
+      // Not an enum: any tool name from the request, or null.
+      values: ['null', '<a tool name>'],
+      // Only meaningful under GuidedJson, where null is the "required" choice.
+      gloss: function (v, init) {
+        if (init.tool_output_mode !== 'GuidedJson') { return 'only applies to GuidedJson'; }
+        return v == null
+          ? 'required choice: payload is one call object, or an array of them'
+          : 'named choice: payload is this tool\'s arguments alone';
+      }
+    }
+  ];
+
+  function buildConfigHtml(init) {
+    if (!init) { return ''; }
+    var items = CONFIG_KEYS.map(function (spec) {
+      var v = init[spec.key];
+      var unset = (v === undefined || v === '');
+      // Distinguish "the case did not set this" from "the case set it to the
+      // variant that happens to be named None".
+      var shown = unset ? '<unset>' : (v === null ? 'null' : String(v));
+      var why = spec.gloss
+        ? spec.gloss(unset ? null : v, init)
+        : (CONFIG_GLOSS[spec.key] || {})[shown];
+      if (unset) {
+        why = 'not set by this case; parser default is ' + spec.dflt
+          + (why ? ' — ' + why : '');
+      }
+      // The value set is part of reading a knob: without it "Response" gives no
+      // hint that "Reasoning" and "None" are the alternatives. Values are literals,
+      // so each is mono even though the surrounding gloss is prose.
+      var vals = (spec.values || [])
+        .map(function (x) { return '<code>' + escapeHtml(x) + '</code>'; })
+        .join(', ');
+      return '<li><code>' + escapeHtml(spec.key + '=' + shown) + '</code>'
+        + (why ? '<span class="ttip-config-why"> — ' + escapeHtml(why) + '</span>' : '')
+        + (vals ? '<span class="ttip-config-vals"> (possible: ' + vals + ')</span>' : '')
+        + '</li>';
+    });
+    if (!items.length) { return ''; }
+    return '<ul class="ttip-config">' + items.join('') + '</ul>';
   }
 
   // --- Tooltip content (built lazily into the empty .ttip) -------------------
@@ -436,11 +541,14 @@
     // the loud section blue). Falls back to its own line only when there is no id/head.
     if (m.head) {
       h += '<div class="ttip-head">' + escapeHtml(m.head)
-        + (m.description ? ' <span class="ttip-head-desc">' + escapeHtml(m.description) + '</span>' : '')
+        + (m.description ? ' <span class="ttip-head-desc">' + codeSpans(escapeHtml(m.description)) + '</span>' : '')
         + '</div>';
     } else if (m.description) {
-      h += '<div class="ttip-casedesc"><span class="ttip-head-desc">' + escapeHtml(m.description) + '</span></div>';
+      h += '<div class="ttip-casedesc"><span class="ttip-head-desc">' + codeSpans(escapeHtml(m.description)) + '</span></div>';
     }
+    // Parser configuration for THIS case, one knob per line, directly under the
+    // description it qualifies.
+    h += buildConfigHtml(m.init);
     // One link context per tooltip, shared by the input and every output cell. Harvest
     // the vocabulary from the INPUT first, then seal it: the input's tokens and their
     // colors are the only ones that exist, and every later render (the input itself,
@@ -650,7 +758,10 @@
                                            : 'n/a — ' + naReason(cell, tip)),
       });
     });
-    return { head: caseId || fullCaseId(tab, col), desc: col.desc || '', grammar: rows, cands: colDefs || [] };
+    // `init` rides along so the column popup lists the SAME parser inputs as the
+    // cells under it — the config list is built from this by the shared builder.
+    return { head: caseId || fullCaseId(tab, col), desc: col.desc || '', init: col.init,
+             grammar: rows, cands: colDefs || [] };
   }
 
   // The header shows the FULL case id, matching the cell popups and the fixture YAML, so
@@ -668,8 +779,11 @@
     // Id + description on ONE line: the id keeps its accent color, the description follows
     // inline in the normal tooltip text color (not the loud section blue).
     var h = '<div class="ttip-head">' + escapeHtml(m.head || '')
-      + (m.desc ? ' <span class="ttip-head-desc">' + escapeHtml(m.desc) + '</span>' : '')
+      + (m.desc ? ' <span class="ttip-head-desc">' + codeSpans(escapeHtml(m.desc)) + '</span>' : '')
       + '</div>';
+    // Same builder as the cell popup: a column header and the cells under it describe
+    // one configuration, so they cannot drift into showing different knobs.
+    h += buildConfigHtml(m.init);
     var cands = m.cands || [];
     var body = '';
     (m.grammar || []).forEach(function (r) {
@@ -708,9 +822,13 @@
       // One OUTPUT column per candidate (golden pinned first, then Reference, then the
       // rest). data-cand/-order/-pin let applyCtl show only golden + the active columns
       // and order them REF-first, exactly like the cell popup's candidate columns.
+      var goldenBlock = r.blocks && r.blocks.golden;
+      var goldenKinds = goldenBlock && goldenBlock.events
+        ? goldenBlock.events.map(function (ev) { return ev.kind; })
+        : null;
       outCell = cands.map(function (c, ci) {
         var blk = r.blocks && r.blocks[c.key];
-        var inner = blk ? outputBlock(blk, r.family || null, ctx).replace(/\n/g, '<br>')
+        var inner = blk ? outputBlock(blk, r.family || null, ctx, goldenKinds).replace(/\n/g, '<br>')
                         : '<span class="parser-base">—</span>';
         return '<td class="gro" data-cand="' + escapeAttr(c.key) + '" data-cand-order="' + ci + '"'
           + (c.pin ? ' data-cand-pin="1"' : '') + '>' + inner + '</td>';
@@ -828,6 +946,13 @@
       td.appendChild(a);
     }
     if (cell.tooltip) {
+      var hasSequenceDivergence = (cell.tooltip.candidates || []).some(function (candidate) {
+        var verdict = candidate.block && candidate.block.verdict;
+        return verdict === 'ORDER' || verdict === 'MERGE';
+      });
+      if (hasSequenceDivergence) {
+        td.setAttribute('data-sequence-divergence', '1');
+      }
       var ttip = document.createElement('div');
       ttip.className = 'ttip';
       td.appendChild(ttip);
@@ -1051,7 +1176,7 @@
           (tip.dynamo_notes || []).forEach(function (pair) { S(pair, 0); S(pair, 1); });
           var blocks = (tip.candidates || []).map(function (c) { return c.block; });
           if (tip.baseline) { blocks.push(tip.baseline.block); }
-          blocks.forEach(function (b) { if (b) { S(b, 'explanation'); S(b, 'unavailable'); } });
+          blocks.forEach(function (b) { if (b) { S(b, 'explanation'); S(b, 'unavailable'); S(b, 'exception'); } });
           (tip.candidates || []).forEach(function (c) {
             var fields = meta[c.key] || {};
             for (var f in fields) {

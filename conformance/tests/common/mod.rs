@@ -3,8 +3,8 @@
 
 //! Shared helpers for the conformance parity test binaries (audit B8): fixture
 //! discovery + the crate-relative display path used in failure messages, which
-//! were copied verbatim across `parity_toolcalling`, `parity_toolcalling_stream`,
-//! and `parity_toolcalling_batch_via_stream`. Each test binary declares
+//! were copied verbatim across `conformance_toolcalling`, `conformance_toolcalling_stream`,
+//! and `conformance_toolcalling_batch_via_stream`. Each test binary declares
 //! `mod common;` so this compiles into it; a binary that uses only a subset is
 //! fine (hence the allow).
 #![allow(dead_code)]
@@ -135,7 +135,14 @@ pub fn version_dirs_ascending(root: &Path, prefix: &str) -> Vec<PathBuf> {
                     // rendered under the 0.1.11 column in HTML). They are NOT the current
                     // parser, so they must never join this "latest capture wins" fold —
                     // otherwise a stale old-binary result can shadow the real latest.
-                    n.starts_with(prefix) && !n.contains(".patch")
+                    //
+                    // `<ver>+<tag>` dirs are the same kind of thing for the same reason:
+                    // a change-scoped capture, an older build run over the current corpus
+                    // (see `capture_cross_version.rs`). Excluded HERE rather than at each
+                    // call site because the version key below splits on non-digits, so
+                    // `0.1.24+pre163` folds to [0,1,24,163] and would sort ABOVE the real
+                    // 0.1.24 — letting a historical snapshot win "latest capture".
+                    n.starts_with(prefix) && !n.contains(".patch") && !n.contains('+')
                 })
         })
         .map(|p| {
@@ -153,4 +160,141 @@ pub fn version_dirs_ascending(root: &Path, prefix: &str) -> Vec<PathBuf> {
         .collect();
     dirs.sort();
     dirs.into_iter().map(|(_, p)| p).collect()
+}
+
+/// One row of the `unified:` block in `conformance/utils/src/parser_families.yaml`.
+///
+/// That block is the ONE place a family is declared for the unified tab. It replaced
+/// five lists that had to agree — `FAMILIES` / `FAM_FILE` / `UNIFIED_FAMILIES` in
+/// `gen_unified_golden.py`, `parsers_for()` in two separate Rust test binaries, the
+/// `family_leak` match, and `MARKER_FAMILY` — where a family added to one and missed in
+/// another either panicked at "no parser mapping" or silently lost its leak detection.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct UnifiedFamily {
+    /// Key into `families:` / `markers:`; differs from the corpus name for qwen3.
+    #[serde(default)]
+    pub registry: Option<String>,
+    /// Has a native UnifiedParser, versus being driven through the v1/v2 split path.
+    #[serde(default)]
+    pub native: bool,
+    pub reasoning_parser: String,
+    pub tool_parser: String,
+    pub golden_spec: String,
+    /// Markup invisible to the shared leak list, so it has to be named per family.
+    #[serde(default)]
+    pub leak_markers: Vec<String>,
+}
+
+impl UnifiedFamily {
+    /// The `families:` / `markers:` key for this corpus family.
+    pub fn registry_key<'a>(&'a self, corpus_name: &'a str) -> &'a str {
+        self.registry.as_deref().unwrap_or(corpus_name)
+    }
+}
+
+/// Path to the family manifest. `CONFORMANCE_FAMILIES` overrides it so a harness copied
+/// into an OLDER worktree (see `capture_cross_version.rs`) still reads the CURRENT
+/// declarations rather than whatever that commit happened to ship.
+pub fn family_manifest_path() -> PathBuf {
+    if let Ok(p) = std::env::var("CONFORMANCE_FAMILIES") {
+        return PathBuf::from(p);
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("utils/src/parser_families.yaml")
+}
+
+/// Every family declared for the unified tab, keyed by CORPUS name.
+pub fn unified_families() -> std::collections::BTreeMap<String, UnifiedFamily> {
+    #[derive(serde::Deserialize)]
+    struct Doc {
+        unified: std::collections::BTreeMap<String, UnifiedFamily>,
+    }
+    let path = family_manifest_path();
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc: Doc =
+        serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+    doc.unified
+}
+
+/// One family, or a panic naming the manifest — a family reaching the harness without a
+/// declaration is a missing row, and saying so beats a generic "no parser mapping".
+pub fn unified_family(corpus_name: &str) -> UnifiedFamily {
+    unified_families().remove(corpus_name).unwrap_or_else(|| {
+        panic!(
+            "family `{corpus_name}` is not declared under `unified:` in {} — add a row there",
+            family_manifest_path().display()
+        )
+    })
+}
+
+/// The request-scoped parser configuration a unified case declares.
+///
+/// Read from the case's `init:` block and passed to the parser verbatim, by BOTH
+/// unified harnesses (`unified_render` draws the tab, `unified_parity` gates CI). It
+/// lives here so there is exactly one answer to "how is a case's parser configured":
+/// each harness previously carried its own copy that INFERRED the config by sniffing
+/// the input text, and the copies could disagree with each other and with the `init:`
+/// the popup displayed — a case could declare `tool_output_mode=GuidedJson` and be
+/// parsed as `Native` because its input did not happen to start with `[`.
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize, PartialEq)]
+pub struct Init {
+    #[serde(default)]
+    pub starting_state: String,
+    #[serde(default)]
+    pub tool_output_mode: String,
+    #[serde(default)]
+    pub named_tool: Option<String>,
+}
+
+impl Init {
+    /// An unknown value is a spec bug, not something to paper over with a default:
+    /// silently falling back to `None`/`Native` is exactly the failure this replaced.
+    pub fn starting_state(&self) -> dynamo_parsers_v2::UnifiedParserStartingState {
+        use dynamo_parsers_v2::UnifiedParserStartingState as P;
+        match self.starting_state.as_str() {
+            "" | "None" => P::None,
+            "Reasoning" => P::Reasoning,
+            "Response" => P::Response,
+            other => panic!("unknown init.starting_state `{other}` (None|Reasoning|Response)"),
+        }
+    }
+
+    pub fn output_mode(&self) -> dynamo_parsers_v2::UnifiedToolOutputMode {
+        use dynamo_parsers_v2::UnifiedToolOutputMode as O;
+        match self.tool_output_mode.as_str() {
+            "" | "Native" => O::Native,
+            "GuidedJson" => O::GuidedJson {
+                named_tool: self.named_tool.clone(),
+            },
+            other => panic!("unknown init.tool_output_mode `{other}` (Native|GuidedJson)"),
+        }
+    }
+
+    /// Apply this configuration to a freshly created parser.
+    pub fn apply(&self, parser: &mut Box<dyn dynamo_parsers_v2::UnifiedParser>, what: &str) {
+        use dynamo_parsers_v2::{InvalidGuidedPayloadPolicy, UnifiedParserInit};
+        parser
+            .initialize_request(UnifiedParserInit {
+                starting_state: self.starting_state(),
+                tool_output_mode: self.output_mode(),
+                invalid_guided_payload: InvalidGuidedPayloadPolicy::RecoverAsText,
+                ..UnifiedParserInit::default()
+            })
+            .unwrap_or_else(|e| panic!("{what}: initialize_request {self:?}: {e}"));
+    }
+
+    /// The config as APPLIED, not as written — an omitted field is reported as the
+    /// value the parser actually received, so what the popup shows and what the
+    /// parser ran under are the same object by construction.
+    pub fn applied(&self) -> serde_json::Value {
+        use dynamo_parsers_v2::UnifiedToolOutputMode as O;
+        serde_json::json!({
+            "starting_state": format!("{:?}", self.starting_state()),
+            "tool_output_mode": match self.output_mode() {
+                O::Native => "Native",
+                O::GuidedJson { .. } => "GuidedJson",
+            },
+            "named_tool": self.named_tool,
+        })
+    }
 }
