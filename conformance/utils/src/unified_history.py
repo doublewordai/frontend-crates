@@ -31,7 +31,7 @@ import capture_stimulus
 import fixture_disposition
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 FAMILY_DOCUMENT_NAME = "inputs_and_golden.yaml"
 FAMILY_KEYS = {
     "schema_version",
@@ -45,17 +45,15 @@ CAPTURE_DOCUMENT_KEYS = {
     "family",
     "implementation",
     "runtime_version",
-    "parent",
     "provenance",
-    "completeness",
     "document",
     "import_lineage",
     "changes",
     "metadata_changes",
     "document_overrides",
 }
-CAPTURE_PROVENANCE_KEYS = {"status", "record_count", "record", "captured_with"}
-CAPTURE_PROVENANCE_STATUSES = {"captured", "legacy", "mixed"}
+CAPTURE_PROVENANCE_KEYS = {"status", "origin", "captured_with"}
+CAPTURE_PROVENANCE_STATUSES = {"captured", "legacy"}
 CASE_KEY_ORDER = (
     "lifecycle",
     "scenario",
@@ -73,12 +71,15 @@ STIMULUS_STATES = {"ref", "inline", "partial", "unavailable"}
 REQUEST_KEYS = {"input", "init", "finish_reason", "tools", "chunks"}
 IMPORT_LINEAGE_KEYS = {"archive", "sha256", "mode"}
 IMPORT_LINEAGE_MODES = {"snapshot", "overlay"}
+CAPTURE_DIRECTORY_RE = re.compile(
+    r"(?P<implementation>[a-z0-9_]+)-(?P<runtime_version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)"
+)
 DOCUMENT_METADATA_EXCLUDED = {
     "family",
     "record_metadata",
 }
 DOCUMENT_PROVENANCE_KEYS = (
-    "capture_provenance",
+    "capture_origin",
     "captured_with",
 )
 TRANSACTION_JOURNAL = ".conformance-transaction.json"
@@ -288,34 +289,32 @@ class History:
     def _invalidate_resolution_cache(self) -> None:
         self._resolved_states.clear()
 
-    def resolve(self, capture_id: str) -> dict:
-        visiting: set[str] = set()
+    def ordered_capture_ids(self) -> list[str]:
+        return sorted(
+            self.captures,
+            key=lambda capture_id: _capture_release_sort_key(
+                self.captures[capture_id]["runtime_version"]
+            ),
+        )
 
-        def visit(current: str) -> dict:
-            cached = self._resolved_states.get(current)
-            if cached is not None:
-                return copy.deepcopy(cached)
-            if current in visiting:
-                raise ValueError(
-                    f"capture parent cycle at {self.capture_paths.get(current, self.directory)}: "
-                    f"{current}"
-                )
-            if current not in self.captures:
-                raise ValueError(f"missing parent in {self.directory}: {current}")
-            visiting.add(current)
+    def resolve(self, capture_id: str) -> dict:
+        if capture_id not in self.captures:
+            raise ValueError(f"unknown capture in {self.directory}: {capture_id}")
+        state = {}
+        for current in self.ordered_capture_ids():
             capture = self.captures[current]
-            parent = capture["parent"]
-            state = copy.deepcopy(visit(parent)) if parent is not None else {}
-            if capture["completeness"] == "snapshot":
-                state = {}
             for case_id, change in capture["changes"].items():
                 if change == {"absent": True}:
                     state.pop(case_id, None)
-                else:
-                    inherited_metadata = state.get(case_id, {}).get("_record_metadata")
-                    state[case_id] = copy.deepcopy(change)
-                    if inherited_metadata is not None:
-                        state[case_id]["_record_metadata"] = inherited_metadata
+                    continue
+                inherited_metadata = state.get(case_id, {}).get("_record_metadata")
+                inherited_overrides = state.get(case_id, {}).get("_document_overrides")
+                state[case_id] = copy.deepcopy(change)
+                state[case_id]["_origin_capture_id"] = current
+                if inherited_metadata is not None:
+                    state[case_id]["_record_metadata"] = inherited_metadata
+                if inherited_overrides is not None:
+                    state[case_id]["_document_overrides"] = inherited_overrides
             for case_id, metadata in capture["metadata_changes"].items():
                 if case_id not in state:
                     raise ValueError(
@@ -326,19 +325,31 @@ class History:
                     state[case_id]["_record_metadata"] = copy.deepcopy(metadata)
                 else:
                     state[case_id].pop("_record_metadata", None)
-            visiting.remove(current)
+            for case_id, override in capture["document_overrides"].items():
+                if case_id not in state:
+                    raise ValueError(
+                        f"document override has no observation in {self.capture_path(current)}: "
+                        f"{case_id}"
+                    )
+                state[case_id]["_document_overrides"] = copy.deepcopy(override)
             self._resolved_states[current] = copy.deepcopy(state)
-            return state
-
-        state = copy.deepcopy(visit(capture_id))
-        capture = self.captures[capture_id]
-        document = _capture_document_metadata(capture, self.implementation)
-        overrides = capture["document_overrides"]
+            if current == capture_id:
+                break
+        else:
+            raise ValueError(f"capture order does not include {capture_id}: {self.directory}")
         materialized = {}
         for case_id, change in state.items():
             record = copy.deepcopy(change)
             record_metadata = record.pop("_record_metadata", None)
-            case_document = {**document, **copy.deepcopy(overrides.get(case_id, {}))}
+            overrides = record.pop("_document_overrides", {})
+            origin_capture_id = record.pop("_origin_capture_id")
+            origin_capture = self.captures[origin_capture_id]
+            case_document = {
+                **_capture_document_metadata(origin_capture, self.implementation),
+                **overrides,
+            }
+            if origin_capture_id != capture_id:
+                case_document["inherited_from"] = origin_capture["runtime_version"]
             if record_metadata:
                 case_document["record_metadata"] = record_metadata
             record["document"] = case_document
@@ -438,29 +449,9 @@ def _validate_family(path: Path, document: dict) -> Family:
 def _capture_document_metadata(capture: dict, implementation: str) -> dict:
     document = copy.deepcopy(capture["document"])
     provenance = capture["provenance"]
+    document["captured_with"] = {implementation: capture["runtime_version"]}
     if provenance.get("status") == "captured":
-        display_version = fixture_disposition.capture_layer_sort_key(
-            capture["runtime_version"]
-        )[0]
-        record = provenance.get("record")
-        captured_with = {implementation: display_version}
-        # Preserve the legacy materialized YAML order: archived captures carry
-        # import lineage and wrote capture_provenance first; current captures
-        # wrote captured_with first. Archive equivalence compares these bytes.
-        if record is not None and capture["import_lineage"]:
-            document["capture_provenance"] = copy.deepcopy(record)
-            document["captured_with"] = captured_with
-        else:
-            document["captured_with"] = captured_with
-            if record is not None:
-                document["capture_provenance"] = copy.deepcopy(record)
-    elif provenance.get("record") is not None:
-        # A legacy import may retain a per-capture provenance record without
-        # having the normalized producer identity required by a new capture.
-        # Preserve that evidence when materializing inherited cases.
-        document["capture_provenance"] = copy.deepcopy(provenance["record"])
-    elif "captured_with" in provenance:
-        document["captured_with"] = copy.deepcopy(provenance["captured_with"])
+        document["capture_origin"] = copy.deepcopy(provenance["origin"])
     return document
 
 
@@ -481,32 +472,20 @@ def _validate_capture_provenance(
     if status not in CAPTURE_PROVENANCE_STATUSES:
         raise ValueError(f"invalid capture provenance status in {path}: {status!r}")
 
-    if status == "mixed":
-        _require_keys(
-            provenance,
-            {"status", "record_count"},
-            {"status", "record_count"},
-            f"{path}.provenance",
-        )
-        record_count = provenance["record_count"]
-        if isinstance(record_count, bool) or not isinstance(record_count, int) or record_count < 0:
-            raise ValueError(f"{path}.provenance.record_count must be a non-negative integer")
-        return provenance
-
-    identity_keys = set(provenance) - {"status"}
-    if len(identity_keys) != 1 or identity_keys - {"record", "captured_with"}:
-        raise ValueError(
-            f"{path}.provenance must contain exactly one of record or captured_with"
-        )
-    identity = next(iter(identity_keys))
-    if identity == "record":
-        _mapping(provenance[identity], f"{path}.provenance.record")
+    if status == "captured":
+        _require_keys(provenance, {"status", "origin"}, {"status", "origin"}, f"{path}.provenance")
+        origin = _mapping(provenance["origin"], f"{path}.provenance.origin")
+        _require_keys(origin, {"crate_version", "source_sha256"}, {"crate_version", "source_sha256", "git_commit"}, f"{path}.provenance.origin")
+        if origin["crate_version"] != runtime_version or not re.fullmatch(r"[0-9a-f]{64}", origin["source_sha256"]):
+            raise ValueError(f"capture origin differs from runtime identity: {path}")
+        if "git_commit" in origin and not re.fullmatch(r"[0-9a-f]{40}", origin["git_commit"]):
+            raise ValueError(f"capture origin has invalid git commit: {path}")
     else:
+        _require_keys(provenance, {"status", "captured_with"}, {"status", "captured_with"}, f"{path}.provenance")
         captured_with = _mapping(
-            provenance[identity], f"{path}.provenance.captured_with"
+            provenance["captured_with"], f"{path}.provenance.captured_with"
         )
-        expected_version = fixture_disposition.capture_layer_sort_key(runtime_version)[0]
-        if captured_with != {implementation: expected_version}:
+        if captured_with != {implementation: runtime_version}:
             raise ValueError(f"capture provenance differs from runtime identity: {path}")
     return provenance
 
@@ -529,7 +508,7 @@ def _validate_capture_file(
         or not isinstance(implementation, str)
         or re.fullmatch(r"[a-z0-9_]+", implementation) is None
         or not isinstance(runtime_version, str)
-        or re.match(r"^\d", runtime_version) is None
+        or re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", runtime_version) is None
     ):
         raise ValueError(f"capture identity differs from its path: {path}")
     capture_id = path.stem
@@ -545,14 +524,6 @@ def _validate_capture_file(
         for key, value in document.items()
         if key not in {"schema_version", "family", "implementation"}
     }
-    if capture["parent"] is not None and not isinstance(capture["parent"], str):
-        raise ValueError(f"capture parent must be a string: {path}")
-    if capture["completeness"] not in {"snapshot", "delta"}:
-        raise ValueError(f"invalid completeness: {path}")
-    if capture["parent"] is None and capture["completeness"] != "snapshot":
-        raise ValueError(f"root capture must be a snapshot: {path}")
-    if capture["parent"] is not None and capture["completeness"] != "delta":
-        raise ValueError(f"non-root capture must be a delta: {path}")
     provenance = _validate_capture_provenance(
         capture["provenance"], path, implementation, runtime_version
     )
@@ -560,13 +531,6 @@ def _validate_capture_file(
     repeated = set(DOCUMENT_PROVENANCE_KEYS) & shared_document.keys()
     if repeated:
         raise ValueError(f"capture document repeats derived provenance in {path}: {sorted(repeated)}")
-    if provenance.get("status") == "captured":
-        _validate_new_capture_provenance(
-            _capture_document_metadata(capture, implementation),
-            capture_id,
-            implementation,
-            runtime_version,
-        )
     if not isinstance(capture["import_lineage"], list):
         raise ValueError(f"import_lineage must be a list: {path}")
     for index, lineage in enumerate(capture["import_lineage"]):
@@ -618,24 +582,10 @@ def _validate_capture_file(
             raise ValueError(
                 f"document override contains reserved metadata in {path}:{case_id}"
             )
-        if "capture_provenance" in metadata:
-            _mapping(
-                metadata["capture_provenance"],
-                f"{path}:{case_id}.document_overrides.capture_provenance",
-            )
-        if "captured_with" in metadata:
-            captured_with = _mapping(
-                metadata["captured_with"],
-                f"{path}:{case_id}.document_overrides.captured_with",
-            )
-            if not captured_with or any(
-                not isinstance(key, str) or not isinstance(value, str) or not value
-                for key, value in captured_with.items()
-            ):
-                raise ValueError(
-                    f"{path}:{case_id}.document_overrides.captured_with must map "
-                    "implementation names to non-empty versions"
-                )
+        if set(metadata) - {"parser_path"}:
+            raise ValueError(f"unsupported document override in {path}:{case_id}")
+        if "parser_path" in metadata and not isinstance(metadata["parser_path"], str):
+            raise ValueError(f"{path}:{case_id}.document_overrides.parser_path must be a string")
     return family_name, implementation, capture_id, capture
 
 
@@ -648,10 +598,6 @@ def _validate_history(
     where = family.path.parent
     if not captures:
         raise ValueError(f"history has no captures: {where}/{implementation}")
-    for capture_id, capture in captures.items():
-        parent = capture["parent"]
-        if parent is not None and parent not in captures:
-            raise ValueError(f"missing parent in {capture_paths[capture_id]}: {parent}")
     history = History(family, implementation, captures, where, capture_paths)
     for capture_id, capture in captures.items():
         state = history.resolve(capture_id)
@@ -660,27 +606,7 @@ def _validate_history(
             raise ValueError(
                 f"document override has no observation in {capture_paths[capture_id]}: {missing}"
             )
-    roots = sorted(
-        capture_id for capture_id, capture in captures.items() if capture["parent"] is None
-    )
-    if len(roots) != 1:
-        raise ValueError(
-            f"capture history must have one graph root in {where}/{implementation}: {roots}"
-        )
-    _unique_capture_leaf(captures, str(where / implementation))
     return history
-
-
-def _unique_capture_leaf(captures: dict, where: str) -> str:
-    parents = {
-        capture["parent"]
-        for capture in captures.values()
-        if capture["parent"] is not None
-    }
-    leaves = sorted(set(captures) - parents)
-    if len(leaves) != 1:
-        raise ValueError(f"capture history must have one graph leaf in {where}: {leaves}")
-    return leaves[0]
 
 
 def _canonical_store_root(root: Path) -> Path:
@@ -689,71 +615,15 @@ def _canonical_store_root(root: Path) -> Path:
 
 def _capture_metadata(histories: dict[tuple[str, str], History]) -> dict[str, dict]:
     metadata_by_capture: dict[str, dict] = {}
-    status_by_capture: dict[str, str | None] = {}
     for history in histories.values():
         for capture_id, capture in history.captures.items():
             provenance = capture["provenance"]
-            provenance_status = provenance.get("status")
-            if provenance.get("status") == "captured":
-                if "record" in provenance:
-                    provenance_identity = (
-                        "record",
-                        _canonical_json(
-                            _provenance_identity(
-                                _capture_document_metadata(
-                                    capture, history.implementation
-                                )
-                            )
-                        ),
-                    )
-                else:
-                    provenance_identity = (
-                        "captured_with",
-                        _canonical_json(provenance["captured_with"]),
-                    )
-            else:
-                resolved_identities = [
-                    _provenance_identity(record["document"])
-                    for record in history.resolve(capture_id).values()
-                ]
-                record_identities = sorted(
-                    _canonical_json(identity)
-                    for identity in resolved_identities
-                    if "capture_provenance" in identity
-                )
-                if record_identities:
-                    provenance_identity = ("record", record_identities[0])
-                else:
-                    provenance_identity = (
-                        "captured_with",
-                        sorted(
-                            _canonical_json(identity)
-                            for identity in resolved_identities
-                        )[0]
-                        if resolved_identities
-                        else None,
-                    )
             metadata = {
                 "runtime_version": capture["runtime_version"],
-                "provenance": provenance_identity,
+                "provenance": copy.deepcopy(provenance),
             }
             prior = metadata_by_capture.setdefault(capture_id, metadata)
-            prior_status = status_by_capture.setdefault(capture_id, provenance_status)
             if prior["runtime_version"] != metadata["runtime_version"]:
-                raise ValueError(f"capture metadata differs across families: {capture_id}")
-            # A version-only capture is a shared release view, but each family
-            # may have been captured from a different producer state or may be
-            # inherited. Keep that provenance on the family history. A
-            # source-qualified capture, by contrast, names one exact producer
-            # identity and must agree across families.
-            version_only_family_provenance = {prior_status, provenance_status} <= {
-                "captured",
-                "mixed",
-            }
-            if (
-                ("+source." in capture_id or not version_only_family_provenance)
-                and prior["provenance"] != metadata["provenance"]
-            ):
                 raise ValueError(f"capture metadata differs across families: {capture_id}")
     return metadata_by_capture
 
@@ -1303,11 +1173,10 @@ def _materialized_record(case: dict, change: dict) -> tuple[dict, dict]:
 
 
 def _capture_release_sort_key(runtime_version: str) -> tuple:
-    base_version, patch = fixture_disposition.capture_layer_sort_key(runtime_version)
-    release_version = base_version.split("+", 1)[0]
+    release_version = runtime_version
     release, separator, prerelease = release_version.partition("-")
     numeric = tuple(int(part) for part in release.split("."))
-    return numeric, 0 if separator else 1, prerelease, base_version, patch
+    return numeric, 0 if separator else 1, prerelease
 
 
 def materialize_store(root: Path, destination: Path, *, include_current_inputs: bool = True) -> None:
@@ -1393,7 +1262,6 @@ def materialize_store(root: Path, destination: Path, *, include_current_inputs: 
             if relative not in written:
                 add_document(directory, family_name, case_key, document)
 
-    capture_metadata = store.capture_metadata
     capture_ids_by_implementation: dict[str, set[str]] = {}
     for (family_name, _implementation), history in sorted(store.histories.items()):
         capture_ids_by_implementation.setdefault(history.implementation, set()).update(
@@ -1439,17 +1307,6 @@ def materialize_store(root: Path, destination: Path, *, include_current_inputs: 
                 add_capture_state(target_id, history, history.resolve(source_id))
 
     _write_materialized_documents(documents)
-
-    for capture_id, metadata in capture_metadata.items():
-        if "+source." in capture_id:
-            paths = [
-                str(path.relative_to(destination / capture_id))
-                for path in (destination / capture_id).glob("*/*.yaml")
-            ]
-            (destination / capture_id / fixture_disposition.CAPTURE_SNAPSHOT).write_bytes(
-                _snapshot_bytes(paths)
-            )
-
 
 def _internal_case_id(case_key: str, scenario: str | None, used: set[str]) -> str:
     stem = scenario or "retired__" + case_key.removeprefix("UNIFIED.")
@@ -1505,128 +1362,12 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
-def _document_metadata(document: dict) -> dict:
-    return {
-        key: value
-        for key, value in document.items()
-        if key not in DOCUMENT_METADATA_EXCLUDED
-    }
-
-
-def _document_provenance(document: dict) -> dict:
+def _provenance_identity(document: dict) -> dict:
+    """Return the small, stable capture identity retained in canonical YAML."""
     return {
         key: document[key]
         for key in DOCUMENT_PROVENANCE_KEYS
         if key in document
-    }
-
-
-def _source_provenance_identity(record: Any, kind: str) -> dict | None:
-    if not isinstance(record, dict) or record.get("kind") != kind:
-        return None
-    source_id = record.get("source_id")
-    source_sha256 = record.get("source_sha256")
-    source_paths = record.get("source_paths")
-    crate_version = record.get("crate_version")
-    if (
-        not isinstance(crate_version, str)
-        or not isinstance(source_sha256, str)
-        or not re.fullmatch(r"[0-9a-f]{64}", source_sha256)
-        or source_id != f"sha256:{source_sha256}"
-        or not isinstance(source_paths, list)
-        or not source_paths
-        or any(not isinstance(path, str) or not path for path in source_paths)
-    ):
-        return None
-    return {
-        "kind": kind,
-        "crate_version": crate_version,
-        "source_id": source_id,
-        "source_sha256": source_sha256,
-        "source_paths": source_paths,
-    }
-
-
-def _unpublished_provenance_identity(record: Any) -> dict | None:
-    return _source_provenance_identity(record, "unpublished")
-
-
-def _validate_new_capture_provenance(
-    identity: dict,
-    capture_id: str,
-    implementation: str,
-    runtime_version: str,
-) -> None:
-    expected_version = fixture_disposition.capture_layer_sort_key(runtime_version)[0]
-    captured_with = identity.get("captured_with")
-    if captured_with is not None and captured_with != {implementation: expected_version}:
-        raise ValueError(
-            f"capture provenance differs from its runtime identity: {capture_id}"
-        )
-
-    record = identity.get("capture_provenance")
-    if record is None:
-        return
-    if not isinstance(record, dict):
-        raise ValueError(
-            f"capture provenance differs from its runtime identity: {capture_id}"
-        )
-
-    kind = record.get("kind")
-    if kind is None:
-        return
-    if implementation != "dynamo_v2" or kind not in {"release", "unpublished"}:
-        raise ValueError(f"capture has an invalid producer provenance identity: {capture_id}")
-    if kind == "unpublished":
-        source = _unpublished_provenance_identity(record)
-        base_version = expected_version.partition("+source.")[0]
-        valid = source is not None and source["crate_version"] == base_version
-        valid = valid and record["label"] in {
-            base_version,
-            f"{base_version}+source.{source['source_sha256']}",
-        }
-    else:
-        source = _source_provenance_identity(record, "release")
-        valid = (
-            source is not None
-            and source["crate_version"] == expected_version.partition("+source.")[0]
-            and record["label"] == expected_version.partition("+source.")[0]
-        )
-    if not valid:
-        raise ValueError(f"capture has an invalid producer provenance identity: {capture_id}")
-
-
-def _provenance_identity(document: dict) -> dict:
-    """Return the immutable identity for one captured document.
-
-    Unpublished captures are named from the parser-source digest. A later checkout
-    can have a different commit and full-tree hash without changing that parser
-    source, so those audit fields must not turn the same capture into a different
-    identity. Released and legacy captures retain their complete provenance shape.
-    """
-    provenance = _document_provenance(document)
-    record = provenance.get("capture_provenance")
-    identity = _unpublished_provenance_identity(record)
-    if identity is None:
-        return provenance
-    return {"capture_provenance": identity}
-
-
-def _capture_provenance_kind(capture: dict) -> str:
-    record = capture["provenance"].get("record")
-    if isinstance(record, dict) and record.get("kind") == "release":
-        return "release"
-    if _unpublished_provenance_identity(record) is not None:
-        return "unpublished"
-    return "legacy"
-
-
-def _document_metadata_for_update(document: dict) -> dict:
-    """Return mutable metadata without provenance, which has its own identity check."""
-    return {
-        key: value
-        for key, value in _document_metadata(document).items()
-        if key not in DOCUMENT_PROVENANCE_KEYS
     }
 
 
@@ -1659,140 +1400,6 @@ def _capture_semantic(value: dict, case_id: str) -> dict:
 
 def _stored_change(value: dict) -> dict:
     return {key: copy.deepcopy(value[key]) for key in CHANGE_KEYS}
-
-
-def _capture_document_parts(records: dict[str, dict]) -> tuple[dict, dict]:
-    metadata = {
-        case_id: _document_metadata_for_update(record["document"])
-        for case_id, record in records.items()
-    }
-    if not metadata:
-        return {}, {}
-    values = list(metadata.values())
-    shared = {
-        key: copy.deepcopy(value)
-        for key, value in values[0].items()
-        if all(key in item and _canonical_json(item[key]) == _canonical_json(value) for item in values)
-    }
-    overrides = {
-        case_id: {key: copy.deepcopy(value) for key, value in item.items() if key not in shared}
-        for case_id, item in metadata.items()
-    }
-    return shared, {case_id: value for case_id, value in overrides.items() if value}
-
-
-def _capture_provenance(
-    records: dict[str, dict],
-    capture_id: str,
-    implementation: str,
-    runtime_version: str,
-    *,
-    strict: bool,
-) -> dict:
-    identities = {}
-    missing = []
-    invalid = []
-    for case_id, change in records.items():
-        document_identity = _document_provenance(change["document"])
-        if not document_identity:
-            missing.append(case_id)
-            continue
-        if any(value is None for value in document_identity.values()):
-            invalid.append(case_id)
-            continue
-        if len(document_identity) > 1 and not strict:
-            invalid.append(case_id)
-            continue
-        identities[_canonical_json(document_identity)] = document_identity
-
-    if missing or invalid or len(identities) != 1:
-        if strict:
-            raise ValueError(f"capture must have one complete provenance identity: {capture_id}")
-        if not identities and missing and not invalid:
-            return {
-                "status": "legacy",
-                "captured_with": {implementation: runtime_version},
-            }
-        return {"status": "mixed", "record_count": len(identities)}
-
-    identity = next(iter(identities.values()))
-    _validate_new_capture_provenance(
-        identity,
-        capture_id,
-        implementation,
-        runtime_version,
-    )
-    if "capture_provenance" in identity:
-        return {"status": "captured", "record": identity["capture_provenance"]}
-    return {"status": "captured", "captured_with": identity["captured_with"]}
-
-
-def _validate_addition_provenance(
-    capture: dict,
-    implementation: str,
-    records: dict[str, dict],
-    additions: list[str],
-) -> None:
-    provenance = capture["provenance"]
-    expected_record = provenance.get("record")
-    expected_captured_with = provenance.get("captured_with")
-    if (expected_record is None) == (expected_captured_with is None):
-        raise ValueError("capture has no unambiguous provenance identity")
-    expected_identity = (
-        _provenance_identity({"capture_provenance": expected_record})
-        if expected_record is not None
-        else None
-    )
-    expected_display_identity = {implementation: capture["runtime_version"]}
-    for case_id in additions:
-        document = records[case_id]["document"]
-        has_record = "capture_provenance" in document
-        has_captured_with = "captured_with" in document
-        if expected_record is not None:
-            record_identity = (
-                _provenance_identity(
-                    {"capture_provenance": document["capture_provenance"]}
-                )
-                if has_record
-                else None
-            )
-            valid = (
-                has_record
-                and _canonical_json(record_identity) == _canonical_json(expected_identity)
-                and (
-                    not has_captured_with
-                    or document["captured_with"] == expected_display_identity
-                )
-            )
-        else:
-            valid = (
-                has_captured_with
-                and not has_record
-                and document["captured_with"] == expected_captured_with
-            )
-        if not valid:
-            raise ValueError(
-                f"capture addition provenance differs from existing identity: {case_id}"
-            )
-
-
-def _preserve_descendant_absence(
-    history: History,
-    capture_id: str,
-    additions: list[str],
-) -> None:
-    invalidated = False
-    for child_id, child in history.captures.items():
-        if child["parent"] != capture_id or child["completeness"] == "snapshot":
-            continue
-        child_state = history.resolve(child_id)
-        for case_id in additions:
-            if case_id not in child_state:
-                if case_id not in child["changes"]:
-                    child["changes"][case_id] = {"absent": True}
-                    invalidated = True
-    if invalidated:
-        history._invalidate_resolution_cache()
 
 
 def _load_loose_document(path: Path, family_name: str) -> dict:
@@ -1828,6 +1435,14 @@ def _update_from_loose(
         for path in loose_root.iterdir()
         if path.is_dir() and re.match(r"^[a-z0-9_]+-\d", path.name)
     }
+    malformed_capture_dirs = sorted(
+        name for name in capture_dirs if CAPTURE_DIRECTORY_RE.fullmatch(name) is None
+    )
+    if malformed_capture_dirs:
+        raise ValueError(
+            "Unified capture directories must use <implementation>-<semantic-version>; "
+            f"found: {', '.join(malformed_capture_dirs)}"
+        )
     if complete_snapshot:
         missing_required_capture_dirs = sorted(required_capture_dirs - capture_dirs)
         if missing_required_capture_dirs:
@@ -1838,12 +1453,14 @@ def _update_from_loose(
         for path in loose_root.iterdir()
         if (
             path.is_dir()
-            and re.match(r"^[a-z0-9_]+-\d", path.name)
+            and CAPTURE_DIRECTORY_RE.fullmatch(path.name) is not None
             and path.name not in excluded_capture_dirs
         )
     ):
-        implementation = capture_dir.name.split("-", 1)[0]
-        runtime_version = capture_dir.name.split("-", 1)[1]
+        match = CAPTURE_DIRECTORY_RE.fullmatch(capture_dir.name)
+        assert match is not None
+        implementation = match["implementation"]
+        runtime_version = match["runtime_version"]
         families = sorted(path.name for path in capture_dir.iterdir() if path.is_dir())
         required_capture = capture_dir.name in required_capture_dirs
         if complete_snapshot:
@@ -1994,62 +1611,21 @@ def _update_from_loose(
                         f"capture provenance is immutable; use a new identity: {capture_dir.name}"
                     )
                 additions = sorted(set(records) - set(resolved))
-                metadata_changes = {
-                    case_id: records[case_id]["document"].get("record_metadata", {})
-                    for case_id in sorted(set(resolved) | set(records))
-                    if case_id in records and _canonical_json(
-                        resolved.get(case_id, {}).get("document", {}).get("record_metadata", {})
-                    )
-                    != _canonical_json(records[case_id]["document"].get("record_metadata", {}))
-                }
-                override_changes = {
-                    case_id: {
-                        key: value
-                        for key, value in _document_metadata_for_update(
-                            records[case_id]["document"]
-                        ).items()
-                        if key not in captures[capture_dir.name]["document"]
-                        or _canonical_json(captures[capture_dir.name]["document"][key])
-                        != _canonical_json(value)
-                    }
-                    for case_id in sorted(set(resolved) | set(records))
-                    if case_id in records
-                    and _canonical_json(
-                        _document_metadata_for_update(
-                            resolved.get(case_id, {}).get("document", {})
-                        )
-                    )
-                    != _canonical_json(_document_metadata_for_update(records[case_id]["document"]))
-                }
-                if not additions and not metadata_changes and not override_changes:
+                if not additions:
                     continue
-                provenance_kind = _capture_provenance_kind(captures[capture_dir.name])
-                if provenance_kind != "unpublished":
-                    label = "released" if provenance_kind == "release" else "versioned"
-                    raise ValueError(
-                        f"{label} capture is immutable; use a new .patchN identity: "
-                        f"{capture_dir.name}"
-                    )
-                _validate_addition_provenance(
-                    captures[capture_dir.name],
-                    implementation,
-                    records,
-                    additions,
+                raise ValueError(
+                    f"capture {capture_dir.name} is already recorded; add a new semantic "
+                    "version after back-capturing any new case across prior versions"
                 )
-                _preserve_descendant_absence(history, capture_dir.name, additions)
-                captures[capture_dir.name]["changes"].update(
-                    {case_id: _stored_change(records[case_id]) for case_id in additions}
+            prior_id = history.ordered_capture_ids()[-1]
+            if _capture_release_sort_key(runtime_version) <= _capture_release_sort_key(
+                history.captures[prior_id]["runtime_version"]
+            ):
+                raise ValueError(
+                    f"capture {capture_dir.name} must use a new semantic version after "
+                    f"{prior_id}"
                 )
-                captures[capture_dir.name]["metadata_changes"].update(metadata_changes)
-                for case_id, override in override_changes.items():
-                    if override:
-                        captures[capture_dir.name]["document_overrides"][case_id] = override
-                    else:
-                        captures[capture_dir.name]["document_overrides"].pop(case_id, None)
-                history._invalidate_resolution_cache()
-                continue
-            parent = _unique_capture_leaf(captures, str(history.path))
-            prior = history.resolve(parent)
+            prior = history.resolve(prior_id)
             changes = {}
             metadata_changes = {}
             for case_id in sorted(set(prior) | set(records)):
@@ -2071,19 +1647,29 @@ def _update_from_loose(
                     after_metadata
                 ):
                     metadata_changes[case_id] = after_metadata
-            shared_document, document_overrides = _capture_document_parts(records)
+            origins = {
+                _canonical_json(record["document"]["capture_origin"])
+                for record in records.values()
+                if "capture_origin" in record["document"]
+            }
+            if origins:
+                if len(origins) != 1:
+                    raise ValueError(f"new capture has mixed source origins: {capture_dir.name}")
+                provenance = {"status": "captured", "origin": json.loads(next(iter(origins)))}
+            else:
+                provenance = {
+                    "status": "legacy",
+                    "captured_with": {implementation: runtime_version},
+                }
+            document_overrides = {
+                case_id: {"parser_path": record["document"]["parser_path"]}
+                for case_id, record in records.items()
+                if "parser_path" in record["document"]
+            }
             capture = {
-                "parent": parent,
                 "runtime_version": runtime_version,
-                "provenance": _capture_provenance(
-                    records,
-                    capture_dir.name,
-                    implementation,
-                    runtime_version,
-                    strict=True,
-                ),
-                "completeness": "delta",
-                "document": shared_document,
+                "provenance": provenance,
+                "document": {"mode": "unified"},
                 "import_lineage": [],
                 "changes": changes,
                 "metadata_changes": metadata_changes,
@@ -2120,44 +1706,15 @@ def _preserve_historical_stimulus(
     request: dict,
     documents: dict[Path, dict],
 ) -> None:
-    digest = _request_digest(request)
-    for (history_family, _implementation), history in store.histories.items():
-        if history_family != family_name:
-            continue
-        invalidated = False
-        for capture in history.captures.values():
-            change = capture["changes"].get(case_id)
-            if not isinstance(change, dict) or change == {"absent": True}:
-                continue
-            stimulus = change["stimulus"]
-            if stimulus.get("ref") != "current":
-                continue
-            if stimulus.get("semantic_sha256", digest) != digest:
-                raise ValueError(
-                    f"historical current stimulus differs before request update: "
-                    f"{history.path}:{case_id}"
-                )
-            change["stimulus"] = {
-                "inline": copy.deepcopy(request),
-                "semantic_sha256": digest,
-            }
-            invalidated = True
-        if invalidated:
-            history._invalidate_resolution_cache()
+    raise ValueError(
+        "Unified test inputs are immutable after capture; changing "
+        f"{family_name}/{case_id} requires recapturing and updating every prior semantic version"
+    )
 
 
 def _shared_corpus_roots(loose_root: Path, base: str) -> list[Path]:
-    """Return the released corpus root followed by PR overlays in numeric order."""
-    overlays = []
-    pattern = re.compile(rf"{re.escape(base)}\+pr(\d+)\.patch(\d+)")
-    for path in loose_root.iterdir():
-        if not path.is_dir():
-            continue
-        match = pattern.fullmatch(path.name)
-        if match is not None:
-            overlays.append((int(match.group(1)), int(match.group(2)), path))
-    overlays.sort(key=lambda row: (row[0], row[1]))
-    return [loose_root / base, *(path for _pr, _patch, path in overlays)]
+    """The canonical authored corpus has one current root per document type."""
+    return [loose_root / base]
 
 
 def _sync_current_corpus(

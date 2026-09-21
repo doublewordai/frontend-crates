@@ -1,36 +1,15 @@
-schema_version: 2
+schema_version: 3
 family: kimi_k3
 implementation: dynamo_v2
-parent: dynamo_v2-0.1.23
 runtime_version: 0.3.2
 provenance:
   status: captured
-  record:
+  origin:
     crate_version: 0.3.2
-    git_commit: c4b8f391e83af58781b024894b79620acd323389
-    git_head_tree: a8dbfd592b4878507bd544c47e499985e22cb312
-    kind: release
-    label: 0.3.2
-    release_commit: c4b8f391e83af58781b024894b79620acd323389
-    release_tag: dynamo-parsers-v2-v0.3.2
-    source_id: sha256:cfe2386719f0c6e0910a6477d2ed732a0c0633d64c820f29b07a1607627d3639
-    source_paths:
-    - parsers/v1/src
-    - parsers/v1/Cargo.toml
-    - parsers/v1/build.rs
-    - parsers/v2/src
-    - parsers/v2/Cargo.toml
-    - parsers/v2/build.rs
-    - protocols/src
-    - protocols/Cargo.toml
-    - protocols/build.rs
-    - Cargo.toml
-    - Cargo.lock
-    - rust-toolchain
-    - rust-toolchain.toml
-    - .cargo
     source_sha256: cfe2386719f0c6e0910a6477d2ed732a0c0633d64c820f29b07a1607627d3639
-completeness: delta
+    git_commit: c4b8f391e83af58781b024894b79620acd323389
+document:
+  mode: unified
 import_lineage:
 - archive: dynamo_v2-0.3.2.tar.gz
   sha256: 9a6ba4a5553408fdb2c881a41db3097640f48c95ee496e055825620fb3dc2145
@@ -53,9 +32,6 @@ import_lineage:
 - archive: dynamo_v2-0.3.2.patch6.tar.gz
   sha256: 4f111c7e14e4567a61b47a9ab80741f3711640158bde53f2bcbbddd7d784a594
   mode: overlay
-document:
-  mode: unified
-document_overrides: {}
 changes:
   arg_marker_in_string:
     case_key: UNIFIED.7.b
@@ -402,3 +378,4 @@ changes:
         code: legacy_unclassified
         detail: 'split parser kimi_k3: no Dynamo parser v2 for family ''kimi_k3'''
 metadata_changes: {}
+document_overrides: {}

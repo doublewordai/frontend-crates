@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 family: deepseek_v4
 input_document:
   family: deepseek_v4

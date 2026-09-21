@@ -38,7 +38,7 @@ toolcalling/fixtures-batch-on-stream-v2/<family>/ # v2 complete-text-through-str
 reasoning/fixtures-v1/inputs/<family>/            # v1 reasoning cases
 ```
 
-**Unified capture history is append-only.** A capture filename carries its implementation and crate version; source provenance stays in the YAML metadata for auditability. Add a family YAML only when that family changes output; every later rendered release view inherits the newest capture for each unchanged family at the same or an earlier crate version. Corrections and added cases for an existing capture use a new `.patchN` overlay. Readers fold overlays within one implementation and capture identity. Legacy source-qualified Dynamo filenames remain readable. `dynamo_v1` and `dynamo_v2` have separate version histories and never fold together. The manifest-pinned snapshot, not whichever loose extracted directories happen to exist locally, determines what the chart shows.
+**Unified capture history is append-only.** Each capture is one `<implementation>-<semantic-version>.yaml` checkpoint. Its first capture retains a compact source origin in YAML metadata; source SHA does not create another capture identity. Add a family YAML only when that family changes output; later release views carry unchanged family output forward from the newest checkpoint at or before that version. Re-running an unchanged checkpoint does not create a file or manifest change. Test inputs are immutable after capture: changing one requires recapturing and updating every prior semantic version. `dynamo_v1` and `dynamo_v2` have separate version histories and never fold together. The manifest-pinned snapshot, not whichever loose extracted directories happen to exist locally, determines what the chart shows.
 
 ## End-to-end test cases (a separate surface, kept elsewhere)
 
@@ -171,7 +171,7 @@ Do not substitute a loose harness feed for the package step. The v2 table reads 
 
 ### 3. Version rule: fixture labels identify the source actually captured
 
-For v2 captures, `dynamo_version.py` verifies the parser sources and build inputs against the release tag before accepting a plain version. Unpublished source keeps `<crate-version>+source.<sha256>` in the YAML provenance metadata, while the capture directory remains `<implementation>-<crate-version>`. The digest covers source content independently of generated fixtures, so packaging does not change the producer identity. Capture producers and current-column selectors share this helper; an explicit release label or source digest that does not match the checkout fails. A rendered release view still carries unchanged families forward from their newest capture at the same or an earlier crate version. Keep published shards unchanged and add version-only captures or historical `.patchN` overlays. Crate publication and version bumps follow [`../RELEASING.md`](../RELEASING.md#manual-version-peg-fixture-synced-releases); changing `Cargo.toml` alone does not establish released provenance.
+For v2 captures, `dynamo_version.py` verifies the parser sources and build inputs against the release tag before accepting a plain version. The first capture retains its source SHA and Git commit as compact YAML origin metadata, while the capture directory remains `<implementation>-<crate-version>`. The digest covers source content independently of generated fixtures, so packaging does not change the producer identity. Capture producers validate this origin; readers select only the semantic version. A rendered release view carries unchanged families forward from their newest capture at or before that version. Crate publication and version bumps follow [`../RELEASING.md`](../RELEASING.md#manual-version-peg-fixture-synced-releases); changing `Cargo.toml` alone does not establish released provenance.
 
 ### 4. What CI actually checks (the regression gate)
 
@@ -192,15 +192,9 @@ A "case" is one numeric-suffix sub-case shared across families. New case IDs use
 3. **Grouping (easy to miss).** Add the case id to its band in **`utils/src/fixtures.py`** `BATCH_SUB_CASE_GROUPS` (the streamv2 tab reuses the batch taxonomy). If you skip this, the column still renders but sorts to the FAR RIGHT as an "unknown" case instead of beside its `<num>.*` siblings. That list now lives in exactly one place, so a case is one edit. A new `<num>.<letter>` should ideally key on its parent `<num>`, not enumerate every letter.
 4. **Capture + package.** `refresh_dynamo_captures.py stream` (records the Dynamo v2 output for the new case), then `package_fixtures.py`, then commit all three published fixture paths. Peer engines (vLLM/SGLang) only cover the new case once re-captured against containers (workflow 1); until then the peer cells read `(no expectation)`.
 
-### 6. Backfill an OLD parser version onto a new case (`.patchN` overlays)
+### 6. Changing an existing Unified test input
 
-To show what an already-released parser version would have produced on a case that didn't exist at its release (e.g. render Dynamo v2 `0.1.11`'s behavior on the new `5.h`), WITHOUT rewriting the pristine `0.1.11` shard:
-
-1. Build the old binary: `git worktree add <path> <release-commit>` (find it via `git log -S'version = "0.1.11"' -- '**/Cargo.toml'`), then `cargo build -p dynamo-parsers-v2 --bin record_dynamo_stream` there.
-2. Run that binary on the new-case input, and write the result into a NEW dir named `dynamo_v2-<ver>.patchN/` (`captured_with: <ver>.patchN`) — a full copy of the base `<ver>` capture plus the backfilled case. The pristine `dynamo_v2-<ver>/` shard stays byte-identical.
-3. `package_fixtures.py` → the new history node and manifest pin. Commit all three published fixture paths.
-
-How `.patchN` is treated: **HTML** folds it into its base `<ver>` display column (it's the same binary, just re-run — `_base_stream_version` / `_impl_version_families` in `generate_conformance_table.py`), so it is NOT a separate candidate. **Parity tests** EXCLUDE `.patchN` dirs entirely (`version_dirs_ascending` in `tests/common/mod.rs`) — they validate the CURRENT parser, and a `.patchN` is an old binary that must never shadow the latest capture.
+Changing a test input is exceptional because every published checkpoint uses the same authored input. Recapture and update every prior semantic version for the affected family, then run `package_fixtures.py`, extract the pinned snapshot, and regenerate the canonical report. Do not add a duplicate capture, source-qualified name, or patch overlay for one version; the history must remain one semantic checkpoint per meaningful output change.
 
 ### 7. Classify a v1-batch vs v2-stream difference (`known-divergences.yaml`)
 

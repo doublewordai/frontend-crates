@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 family: muse_glimmer
 input_document:
   family: muse_glimmer

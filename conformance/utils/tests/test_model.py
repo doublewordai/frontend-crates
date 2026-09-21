@@ -429,8 +429,8 @@ def test_unified_selector_uses_source_checkout_with_or_without_staging(tmp_path,
 def test_unified_source_selection_inherits_previous_family_capture(
     tmp_path, monkeypatch, current_present, capture_failure
 ):
-    selected = "0.6.1+source." + "f" * 64
-    previous = "0.6.0+source." + "0" * 64
+    selected = "0.6.1"
+    previous = "0.6.0"
     scenario, family = "text_only", "gemma4"
     generator = table.gen_unified_golden
     authored = generator.build_cases(family)[f"UNIFIED.{scenario}.{family}"]
@@ -472,7 +472,7 @@ def test_unified_source_selection_inherits_previous_family_capture(
     candidates = {candidate["key"]: candidate for candidate in tab["candidates"]}
     assert candidates["dynamo"]["version"] == selected
     assert candidates["dynamo"]["label"] == "Dynamo v2 Rust 0.6.1 (stream, Combined & Unified)"
-    assert not {key for key in candidates if key.startswith("dynamo@")}
+    assert {key for key in candidates if key.startswith("dynamo@")} == {f"dynamo@{previous}"}
     cell = next(row for row in tab["rows"] if row["family"] == family)["cells"][scenario]
     current = next(candidate for candidate in cell["tooltip"]["candidates"] if candidate["key"] == "dynamo")
     assert current["label"] == candidates["dynamo"]["label"]
