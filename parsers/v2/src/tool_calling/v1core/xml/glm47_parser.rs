@@ -375,6 +375,41 @@ fn decode_xml_entities(s: &str) -> String {
         .replace("&apos;", "'")
 }
 
+/// Escape raw control characters that appear inside JSON string literals.
+fn escape_control_chars_in_strings(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let (mut in_string, mut escaped) = (false, false);
+    for c in s.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                out.push(c);
+            } else if c == '\\' {
+                escaped = true;
+                out.push(c);
+            } else if c == '"' {
+                in_string = false;
+                out.push(c);
+            } else if (c as u32) < 0x20 {
+                match c {
+                    '\n' => out.push_str("\\n"),
+                    '\t' => out.push_str("\\t"),
+                    '\r' => out.push_str("\\r"),
+                    _ => out.push_str(&format!("\\u{:04x}", c as u32)),
+                }
+            } else {
+                out.push(c);
+            }
+        } else {
+            if c == '"' {
+                in_string = true;
+            }
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Coerce a raw string value using the tool's parameter schema.
 /// Falls back to string if no schema is available or the type is unrecognized.
 fn coerce_value(raw: &str, schema_type: Option<&str>) -> ParsedValue {
@@ -422,6 +457,17 @@ fn coerce_value(raw: &str, schema_type: Option<&str>) -> ParsedValue {
                 && v.is_array()
             {
                 return v.into();
+            }
+            // Models emit raw tabs/newlines inside JSON strings; strict JSON rejects them.
+            if let Ok(v) = serde_json::from_str::<Value>(&escape_control_chars_in_strings(trimmed))
+                && v.is_array()
+            {
+                return v.into();
+            }
+            // Bracketed text that still fails to parse is broken JSON, not a comma list:
+            // splitting it would hand the caller shards of the model's text.
+            if trimmed.starts_with('[') {
+                return Value::String(raw.to_string()).into();
             }
             let items: Vec<Value> = trimmed
                 .split(',')
@@ -633,6 +679,48 @@ mod tests {
 
     fn get_test_config() -> Glm47ParserConfig {
         Glm47ParserConfig::default()
+    }
+
+    fn edit_file_tools() -> Vec<ToolDefinition> {
+        vec![ToolDefinition {
+            name: "edit_file".to_string(),
+            parameters: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "old_str": {"type": "string"},
+                    "edits": {"type": "array"}
+                }
+            })),
+        }]
+    }
+
+    fn parse_args(input: &str) -> serde_json::Value {
+        let (calls, _) =
+            try_tool_call_parse_glm47(input, &get_test_config(), Some(&edit_file_tools())).unwrap();
+        assert_eq!(calls.len(), 1);
+        serde_json::from_str(&calls[0].function.arguments).unwrap()
+    }
+
+    #[test]
+    fn test_array_argument_accepts_raw_control_characters_in_strings() {
+        let input = "<tool_call>edit_file<arg_key>path</arg_key><arg_value>root.tsx</arg_value><arg_key>edits</arg_key><arg_value>[{\"old_str\": \"\t\t<CartProvider>\nnext, line\", \"new_str\": \"x\"}]</arg_value></tool_call>";
+        let args = parse_args(input);
+        assert_eq!(
+            args["edits"][0]["old_str"],
+            "\t\t<CartProvider>\nnext, line"
+        );
+    }
+
+    #[test]
+    fn test_broken_json_array_is_not_comma_split() {
+        let input = r#"<tool_call>edit_file<arg_key>path</arg_key><arg_value>a.jsx</arg_value><arg_key>edits</arg_key><arg_value>[{"old_str": "f(a, b)" "old_str2": "x"}]</arg_value></tool_call>"#;
+        let args = parse_args(input);
+        assert!(
+            args["edits"].is_string(),
+            "broken JSON must reach the caller as written, got {}",
+            args["edits"]
+        );
     }
 
     #[test]
