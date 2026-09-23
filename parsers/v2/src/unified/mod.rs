@@ -52,6 +52,7 @@ pub mod deepseek_v4;
 pub mod deepseek_v41;
 pub mod gemma4;
 mod guided_cursor;
+pub mod hunyuan;
 pub mod kimi_k2;
 pub mod kimi_k3;
 pub mod muse_glimmer;
@@ -5050,6 +5051,7 @@ unified_registry! {
     "deepseek_v4" => deepseek_v4::deepseek_v4_unified,
     "deepseek_v41" => deepseek_v41::deepseek_v41_unified,
     "gemma4" => gemma4::gemma4_unified,
+    "hunyuan" | "hy3" => hunyuan::hunyuan_unified,
     "qwen3" | "qwen3_coder" => qwen3::qwen3_unified,
     "muse_glimmer" => muse_glimmer::muse_glimmer_unified,
     "kimi_k2"               => kimi_k2::kimi_k2_unified,
