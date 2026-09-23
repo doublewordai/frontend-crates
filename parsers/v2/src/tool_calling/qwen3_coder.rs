@@ -33,7 +33,7 @@ const FUNCTION_START: &str = "<function=";
 const FUNCTION_END: &str = "</function>";
 const PARAMETER_START: &str = "<parameter=";
 
-fn spec() -> WrappedBlockSpec {
+pub(crate) fn spec() -> WrappedBlockSpec {
     WrappedBlockSpec {
         family: "qwen3_coder",
         block_starts: vec![BLOCK_START.to_string()],

@@ -1432,7 +1432,12 @@ def _update_from_loose(
             key = (family_name, implementation)
             history = store.histories.get(key)
             if history is None:
-                raise ValueError(f"no history file owns {capture_dir.name}/{family_name}")
+                if family_name not in store.families:
+                    raise ValueError(f"no history file owns {capture_dir.name}/{family_name}")
+                # A family's first capture for an implementation starts its history.
+                family = store.families[family_name]
+                history = History(family, implementation, {}, family.path.parent, {})
+                store.histories[key] = history
             case_by_external = {}
             for case_id, case in history.family.cases.items():
                 for external_id in [case["display_id"], *case["historical_ids"]]:
@@ -1532,15 +1537,16 @@ def _update_from_loose(
                     f"capture {capture_dir.name} is already recorded; add a new semantic "
                     "version after back-capturing any new case across prior versions"
                 )
-            prior_id = history.ordered_capture_ids()[-1]
-            if _capture_release_sort_key(runtime_version) <= _capture_release_sort_key(
-                history.captures[prior_id]["runtime_version"]
-            ):
+            ordered = history.ordered_capture_ids()
+            prior_id = ordered[-1] if ordered else None
+            if prior_id is not None and _capture_release_sort_key(
+                runtime_version
+            ) <= _capture_release_sort_key(history.captures[prior_id]["runtime_version"]):
                 raise ValueError(
                     f"capture {capture_dir.name} must use a new semantic version after "
                     f"{prior_id}"
                 )
-            prior = history.resolve(prior_id)
+            prior = history.resolve(prior_id) if prior_id is not None else {}
             changes = {}
             metadata_changes = {}
             for case_id in sorted(set(prior) | set(records)):

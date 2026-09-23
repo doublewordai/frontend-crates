@@ -130,6 +130,11 @@ markers:
     leak: ["<|open|>", "<|close|>", "<|sep|>", "<|end_of_msg|>"]
   llama3_json:
     singletons: ["<|python_tag|>"]
+  mimo:
+    pairs: [["<tool_call>", "</tool_call>"]]
+    # Same raw `<parameter=K>` value as qwen3_coder, kept byte for byte.
+    opaque: ["parameter"]
+    leak: ["<function=", "</function", "<parameter=", "</parameter"]
   minimax_m2:
     pairs: [["<minimax:tool_call>", "</minimax:tool_call>"]]
     leak: ["<invoke", "</invoke", "<parameter", "</parameter"]
@@ -236,6 +241,13 @@ unified:
     tool_parser: kimi_k3
     golden_spec: kimi_k3.yaml
     leak_markers: ["<|open|>", "<|close|>", "<|sep|>", "<|end_of_msg|>"]
+  mimo:
+    registry: mimo
+    native: true
+    reasoning_parser: qwen3
+    tool_parser: qwen3_coder
+    golden_spec: mimo.yaml
+    leak_markers: ["<tool_call>", "</tool_call>", "<function=", "</function>", "<parameter=", "</parameter>"]
   muse_glimmer:
     native: true
     # Prefilled channels ARE supported: `initialize_request` opens the stream in the
