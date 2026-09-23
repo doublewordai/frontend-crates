@@ -86,7 +86,10 @@ def test_invoke_header_prefix_is_inner_and_unterminated() -> None:
         assert prefix == prefix.lstrip()
         if family != "deepseek_v41":
             assert not prefix.startswith(control_tokens(family)[2])
-        assert prefix.rsplit(">", 1)[-1]
+        # Hunyuan's name follows a complete `<tool_call>` marker and ends at
+        # `<tool_sep>`, so its header prefix is that marker, `>` included.
+        if family != "hunyuan":
+            assert prefix.rsplit(">", 1)[-1]
 
 
 def test_request_scoped_cases_never_claim_vllm_match() -> None:
@@ -401,6 +404,7 @@ def test_deepseek_v41_guided_narration_uses_an_unfinished_dsml_invoke() -> None:
     ("deepseek_v4", '<｜DSML｜invoke name="'),
     ("deepseek_v41", '<｜DSML｜ invoke name="'),
     ("gemma4", "call:"),
+    ("hunyuan", "<tool_call:opensource>"),
     ("kimi_k2", "<|tool_call_begin|>functions."),
     ("kimi_k3", '<|open|>call tool="'),
     ("muse_glimmer", '<atem:invoke name="'),
@@ -577,13 +581,14 @@ def test_unified_case_counts_match_the_generator():
             "deepseek_v4": 80,
             "deepseek_v41": 80,
             "gemma4": 82,
+            "hunyuan": 80,
             "kimi_k2": 80,
             "kimi_k3": 88,
             "muse_glimmer": 81,
             "qwen3": 80,
         }[fam]
         assert per_family[fam] == family_specific, f"{fam} diverged from the expected case count"
-    assert sum(per_family.values()) == 571
+    assert sum(per_family.values()) == 651
 
 
 def test_deferred_case_ids_are_not_in_the_active_taxonomy():
@@ -811,6 +816,7 @@ def _family_value(scenario, family):
             "deepseek_v4": "</｜DSML｜invoke>",
             "deepseek_v41": "</｜DSML｜ invoke>",
             "gemma4": "}<tool_call|>",
+            "hunyuan": "</tool_calls:opensource>",
             "kimi_k2": "<|tool_call_end|>",
             "kimi_k3": "<|close|>call<|sep|>",
             "muse_glimmer": "</atem:function_calls>",
@@ -880,6 +886,7 @@ def _native_input_calls(family, raw):
         "deepseek_v4": r'<｜DSML｜invoke name="([^"]+)">',
         "deepseek_v41": r'<｜DSML｜ invoke name="([^"]+)">',
         "qwen3": r'<function=([^>]+)>',
+        "hunyuan": r'<tool_call:opensource>([^<]+?)(?=<tool_sep:opensource>|<arg_key:opensource>|</tool_call:opensource>)',
         "muse_glimmer": r'<atem:invoke name="([^"]+)">',
         "gemma4": r'call:([\w.-]+)\{',
         "kimi_k2": r'<\|tool_call_begin\|>(?:functions\.)?([\w.-]+):\d+<\|tool_call_argument_begin\|>',
@@ -897,6 +904,10 @@ def _native_input_calls(family, raw):
                 arguments[key] = value if is_string == "true" else json.loads(value)
         elif family == "qwen3":
             arguments = {key: value.strip() for key, value in re.findall(r'<parameter=([^>]+)>(.*?)</parameter>', body, re.S)}
+        elif family == "hunyuan":
+            arguments = dict(re.findall(
+                r'<arg_key:opensource>(.*?)</arg_key:opensource>\s*<arg_value:opensource>(.*?)</arg_value:opensource>',
+                body, re.S))
         elif family == "muse_glimmer":
             for key, value in re.findall(r'<atem:parameter name="([^"]+)">(.*?)</atem:parameter>', body, re.S):
                 try:
