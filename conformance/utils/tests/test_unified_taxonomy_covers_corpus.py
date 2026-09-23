@@ -407,6 +407,7 @@ def test_deepseek_v41_guided_narration_uses_an_unfinished_dsml_invoke() -> None:
     ("hunyuan", "<tool_call:opensource>"),
     ("kimi_k2", "<|tool_call_begin|>functions."),
     ("kimi_k3", '<|open|>call tool="'),
+    ("mimo", "<function="),
     ("muse_glimmer", '<atem:invoke name="'),
     ("qwen3", "<function="),
 ])
@@ -584,11 +585,12 @@ def test_unified_case_counts_match_the_generator():
             "hunyuan": 80,
             "kimi_k2": 80,
             "kimi_k3": 88,
+            "mimo": 80,
             "muse_glimmer": 81,
             "qwen3": 80,
         }[fam]
         assert per_family[fam] == family_specific, f"{fam} diverged from the expected case count"
-    assert sum(per_family.values()) == 651
+    assert sum(per_family.values()) == 731
 
 
 def test_deferred_case_ids_are_not_in_the_active_taxonomy():
@@ -819,6 +821,7 @@ def _family_value(scenario, family):
             "hunyuan": "</tool_calls:opensource>",
             "kimi_k2": "<|tool_call_end|>",
             "kimi_k3": "<|close|>call<|sep|>",
+            "mimo": "</tool_call>",
             "muse_glimmer": "</atem:function_calls>",
             "qwen3": "</tool_call>",
         }[family]
@@ -887,6 +890,7 @@ def _native_input_calls(family, raw):
         "deepseek_v41": r'<｜DSML｜ invoke name="([^"]+)">',
         "qwen3": r'<function=([^>]+)>',
         "hunyuan": r'<tool_call:opensource>([^<]+?)(?=<tool_sep:opensource>|<arg_key:opensource>|</tool_call:opensource>)',
+        "mimo": r'<function=([^>]+)>',
         "muse_glimmer": r'<atem:invoke name="([^"]+)">',
         "gemma4": r'call:([\w.-]+)\{',
         "kimi_k2": r'<\|tool_call_begin\|>(?:functions\.)?([\w.-]+):\d+<\|tool_call_argument_begin\|>',
@@ -908,6 +912,8 @@ def _native_input_calls(family, raw):
             arguments = dict(re.findall(
                 r'<arg_key:opensource>(.*?)</arg_key:opensource>\s*<arg_value:opensource>(.*?)</arg_value:opensource>',
                 body, re.S))
+        elif family == "mimo":
+            arguments = dict(re.findall(r'<parameter=([^>]+)>(.*?)</parameter>', body, re.S))
         elif family == "muse_glimmer":
             for key, value in re.findall(r'<atem:parameter name="([^"]+)">(.*?)</atem:parameter>', body, re.S):
                 try:

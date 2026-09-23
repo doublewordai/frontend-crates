@@ -55,6 +55,7 @@ mod guided_cursor;
 pub mod hunyuan;
 pub mod kimi_k2;
 pub mod kimi_k3;
+pub mod mimo;
 pub mod muse_glimmer;
 pub mod qwen3;
 
@@ -5053,6 +5054,7 @@ unified_registry! {
     "gemma4" => gemma4::gemma4_unified,
     "hunyuan" | "hy3" => hunyuan::hunyuan_unified,
     "qwen3" | "qwen3_coder" => qwen3::qwen3_unified,
+    "mimo" | "mimo_v2" => mimo::mimo_unified,
     "muse_glimmer" => muse_glimmer::muse_glimmer_unified,
     "kimi_k2"               => kimi_k2::kimi_k2_unified,
     "kimi_k3" | "kimi-k3"   => kimi_k3::kimi_k3_unified,
