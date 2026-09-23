@@ -105,6 +105,15 @@ markers:
     pairs: [["<tool_call>", "</tool_call>"], ["<arg_key>", "</arg_key>"], ["<arg_value>", "</arg_value>"]]
   hermes:
     pairs: [["<tool_call>", "</tool_call>"]]
+  hunyuan:
+    pairs:
+      - ["<tool_calls:opensource>", "</tool_calls:opensource>"]
+      - ["<tool_call:opensource>", "</tool_call:opensource>"]
+      - ["<arg_key:opensource>", "</arg_key:opensource>"]
+      - ["<arg_value:opensource>", "</arg_value:opensource>"]
+    singletons: ["<tool_sep:opensource>"]
+    # An argument value is read to its own closer, so a marker inside it is data.
+    opaque: ["<arg_value:opensource>"]
   inkling:
     pairs: [["<|content_invoke_tool_json|>", "<|end_message|>"]]
     singletons: ["<|message_model|>", "<|content_model_end_sampling|>"]
@@ -236,6 +245,13 @@ unified:
     tool_parser: kimi_k3
     golden_spec: kimi_k3.yaml
     leak_markers: ["<|open|>", "<|close|>", "<|sep|>", "<|end_of_msg|>"]
+  hunyuan:
+    registry: hunyuan
+    native: true
+    reasoning_parser: qwen3
+    tool_parser: glm47
+    golden_spec: hunyuan.yaml
+    leak_markers: ["<think:opensource>", "</think:opensource>", "<tool_calls:opensource>", "</tool_calls:opensource>", "<tool_call:opensource>", "</tool_call:opensource>", "<tool_sep:opensource>", "<arg_key:opensource>", "</arg_key:opensource>", "<arg_value:opensource>", "</arg_value:opensource>"]
   muse_glimmer:
     native: true
     # Prefilled channels ARE supported: `initialize_request` opens the stream in the
