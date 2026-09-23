@@ -35,16 +35,16 @@ this repo's `main` with a cargo `[patch]`.
 
 - `vendor/fork-layout`: this section.
 - `upstream-pr/glm47-v1-no-entity-decode`: deliver GLM tool-call argument
-  values as written; no XML entity decoding.
+  values as written; no XML entity decoding. Fork PR #6.
 - `upstream-pr/glm47-array-no-split`: keep GLM tool-call array arguments
-  whole; no comma splitting.
-
-## Planned stack (agreed 2026-09-22)
-
-- `upstream-pr/hunyuan-parser`: Hunyuan reasoning and tool-call parsing,
+  whole; no comma splitting. Fork PR #5.
+- `upstream-pr/hunyuan-parser`: Hunyuan (Hy3) unified reasoning and
+  tool-call parser, moved here from the dynamo fork.
+- `upstream-pr/mimo-parser`: MiMo unified reasoning and tool-call parser,
   moved here from the dynamo fork.
-- `upstream-pr/mimo-parser`: MiMo reasoning and tool-call parsing, moved
-  here from the dynamo fork.
+
+The dynamo fork pins a `main` commit of this repo in its
+`vendor/frontend-crates-patch` branch.
 
 ---
 
