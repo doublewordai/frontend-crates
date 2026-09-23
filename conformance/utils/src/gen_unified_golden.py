@@ -46,6 +46,7 @@ GRAMMAR_NOTE = {
     "deepseek_v4": "reasoning `<think>...</think>`, tool `<｜DSML｜tool_calls><｜DSML｜invoke name=\"NAME\"><｜DSML｜parameter name=\"KEY\" string=\"true\">VALUE</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>`.",
     "gemma4": "reasoning `<|channel>thought\\n...<channel|>`, tool `<|tool_call>call:NAME{key:<|\"|>value<|\"|>}<tool_call|>` (string values wrapped in `<|\"|>`; an embedded `<tool_call|>` inside a `<|\"|>` string is data, not the end marker).",
     "qwen3": "reasoning `<think>...</think>`, tool `<tool_call><function=NAME><parameter=KEY>VALUE</parameter></function></tool_call>`.",
+    "mimo": "Qwen3-Coder markup: reasoning `<think>...</think>`, tool `<tool_call><function=NAME><parameter=KEY>VALUE</parameter></function></tool_call>`, where VALUE is every byte between the parameter tags (no trimming) with HTML character references decoded.",
     "kimi_k2": "reasoning `<think>...</think>`, tool section `<|tool_calls_section_begin|><|tool_call_begin|>functions.NAME:IDX<|tool_call_argument_begin|>{...}<|tool_call_end|><|tool_calls_section_end|>`.",
     "kimi_k3": "reasoning `<|open|>think<|sep|>...<|close|>think<|sep|>`, tool `<|open|>tools<|sep|><|open|>call tool=\"NAME\" index=\"IDX\"<|sep|><|open|>argument key=\"KEY\" type=\"string\"<|sep|>VALUE<|close|>argument<|sep|><|close|>call<|sep|><|close|>tools<|sep|>`.",
     "muse_glimmer": "recipient-routed messages `<|start|>assistant to=RCPT<|message|>...<|eom|>`: `self` is reasoning, `user` is visible content, any other recipient opens a tool channel whose body is ATEM XML `<atem:function_calls><atem:invoke name=\"NAME\"><atem:parameter name=\"KEY\">VALUE</atem:parameter></atem:invoke></atem:function_calls>`. `<|eom|>` closes a message with more to follow, `<|eot|>` ends the turn. Spec: https://huggingface.co/meta-models/Muse-Glimmer-30B.",
@@ -161,6 +162,8 @@ def r_tool(fam, name, key, val, idx):
     if fam == "qwen3":
         return (f"<tool_call>\n<function={name}>\n<parameter={key}>\n"
                 f"{val}\n</parameter>\n</function>\n</tool_call>")
+    if fam == "mimo":
+        return qwen3_as_mimo(r_tool("qwen3", name, key, val, idx))
     if fam == "muse_glimmer":
         return (f"<|start|>assistant to={name}<|message|><atem:function_calls>\n"
                 f"<atem:invoke name=\"{name}\">\n"
@@ -171,6 +174,22 @@ def r_tool(fam, name, key, val, idx):
     args = json.dumps({key: val}, ensure_ascii=False)
     return (f"<|tool_calls_section_begin|><|tool_call_begin|>functions.{name}:{idx}"
             f"<|tool_call_argument_begin|>{args}<|tool_call_end|><|tool_calls_section_end|>")
+
+
+def qwen3_as_mimo(input_text):
+    """Translate a Qwen3 input into MiMo without changing its meaning.
+
+    The markup is the same. Qwen3 trims parameter values, so its inputs wrap each
+    value in newlines; MiMo keeps every byte between the tags, so those wrapping
+    newlines go.
+    """
+    text = re.sub(r"(<parameter=[^>\n]*>)\n", r"\1", input_text)
+    return text.replace("\n</parameter>", "</parameter>")
+
+
+# Families whose edge inputs are derived from another family's authored input,
+# mapped to (source family, input translation, golden fill translation).
+DERIVED_INPUTS = {"mimo": ("qwen3", qwen3_as_mimo, lambda fill: fill)}
 
 
 def kimi_input_as_dsml(input_text):
@@ -456,6 +475,7 @@ VLLM_UNCAPTURABLE = {
     "deepseek_v4": D("UNSUPPORTED", "no released vLLM UnifiedParser capture for DeepSeek V4"),
     "muse_glimmer": V_MUSE,
     "kimi_k3": D("UNSUPPORTED", "no released vLLM UnifiedParser capture for Kimi K3"),
+    "mimo": D("UNSUPPORTED", "no released vLLM UnifiedParser capture for MiMo"),
 }
 
 
@@ -1714,6 +1734,8 @@ def _entry(spec, fam):
     if isinstance(spec, dict) and set(spec) <= set(FAMILIES) and "verdict" not in spec:
         if fam == "deepseek_v4" and fam not in spec:
             return spec["qwen3"]
+        if fam in DERIVED_INPUTS and fam not in spec:
+            return spec[DERIVED_INPUTS[fam][0]]
         return spec[fam]
     return spec
 
@@ -1844,6 +1866,12 @@ def _build_edge_cases(fam, specs):
                 kimi_input, *rest = per_fam["kimi_k2"]
                 per_fam = dict(per_fam)
                 per_fam[fam] = (kimi_input_as_dsml(kimi_input), *rest)
+            elif fam in DERIVED_INPUTS and DERIVED_INPUTS[fam][0] in per_fam:
+                source, translate, translate_fill = DERIVED_INPUTS[fam]
+                source_input, vllm_spec, dynamo_spec, *rest = per_fam[source]
+                rest = [translate_fill(fill) if isinstance(fill, str) else fill for fill in rest]
+                per_fam = dict(per_fam)
+                per_fam[fam] = (translate(source_input), vllm_spec, dynamo_spec, *rest)
             else:
                 raise KeyError(
                     f"{name}: no input authored for family {fam!r}. Add one, or wrap the map "

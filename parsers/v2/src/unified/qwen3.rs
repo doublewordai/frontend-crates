@@ -125,7 +125,7 @@ impl Default for QwenGuidedPrefix {
     }
 }
 
-fn qwen_guided_prefix() -> Box<dyn GuidedPrefixScanner> {
+pub(super) fn qwen_guided_prefix() -> Box<dyn GuidedPrefixScanner> {
     Box::new(QwenGuidedPrefix::default())
 }
 
