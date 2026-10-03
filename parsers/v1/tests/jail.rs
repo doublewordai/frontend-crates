@@ -3194,6 +3194,57 @@ mod parallel_jail_tests {
         }
     }
 
+    /// A glm47 call to a tool the request does not declare (the conversation used
+    /// it earlier, the current `tools` list omits it) streams out as a tool call with
+    /// the name and arguments the model wrote, not as an empty response.
+    #[tokio::test]
+    async fn test_glm47_call_to_undeclared_tool_streams_as_tool_call() {
+        use dynamo_parsers::tool_calling::ToolDefinition;
+
+        let tool_defs = vec![ToolDefinition {
+            name: "search".to_string(),
+            parameters: Some(serde_json::json!({
+                "type": "object",
+                "properties": {"queries": {"type": "array"}},
+            })),
+            strict: None,
+        }];
+        let chunks = vec![
+            test_utils::create_mock_response_chunk("<tool_call>".to_string(), 0),
+            test_utils::create_mock_response_chunk("img_gen<arg_key>prompt".to_string(), 0),
+            test_utils::create_mock_response_chunk(
+                "</arg_key><arg_value>A pastel logo</arg_value>".to_string(),
+                0,
+            ),
+            test_utils::create_mock_response_chunk("</tool_call>".to_string(), 0),
+        ];
+        let jail = JailedStream::builder()
+            .tool_call_parser("glm47")
+            .tool_definitions(tool_defs)
+            .build();
+
+        let results: Vec<_> = jail
+            .apply_with_finish_reason(stream::iter(chunks))
+            .collect()
+            .await;
+
+        validate_parallel_streaming_tool_calls(
+            &results,
+            &[("img_gen", json!({"prompt": "A pastel logo"}))],
+        );
+        for result in &results {
+            for choice in &result.data.as_ref().unwrap().choices {
+                if let Some(ref content) = choice.delta.content {
+                    let text = test_utils::extract_text(content);
+                    assert!(
+                        !text.contains("<arg_") && !text.contains("tool_call"),
+                        "wire markup must not leak into content, got: {text:?}"
+                    );
+                }
+            }
+        }
+    }
+
     // =============================================================================
     // 2. PARALLEL TOOL CALLS ACROSS MULTIPLE CHUNKS (STREAMING)
     // =============================================================================
