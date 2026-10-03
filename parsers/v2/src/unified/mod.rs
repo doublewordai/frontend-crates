@@ -51,6 +51,7 @@
 pub mod deepseek_v4;
 pub mod deepseek_v41;
 pub mod gemma4;
+pub mod glm47;
 mod guided_cursor;
 pub mod kimi_k2;
 pub mod kimi_k3;
@@ -758,7 +759,10 @@ impl<E: InvokeEmitter + Send> NativeUnified for ScannerUnified<E> {
             control_markers: self.scanner.control_markers().to_vec(),
             invoke_start: self.scanner.invoke_start().to_string(),
             invoke_end: self.scanner.invoke_end().to_string(),
-            invoke_boundary_factory: self.scanner.invoke_boundary_factory(),
+            invoke_boundary_factory: self
+                .scanner
+                .invoke_boundary_factory()
+                .and_then(InvokeBoundaryFactory::for_guided),
             guided_prefix_policy: self.guided_prefix_policy,
             guided_prefix_factory: self.guided_prefix_factory,
         }
@@ -5050,6 +5054,7 @@ unified_registry! {
     "deepseek_v4" => deepseek_v4::deepseek_v4_unified,
     "deepseek_v41" => deepseek_v41::deepseek_v41_unified,
     "gemma4" => gemma4::gemma4_unified,
+    "glm47" => glm47::glm47_unified,
     "qwen3" | "qwen3_coder" => qwen3::qwen3_unified,
     "muse_glimmer" => muse_glimmer::muse_glimmer_unified,
     "kimi_k2"               => kimi_k2::kimi_k2_unified,
