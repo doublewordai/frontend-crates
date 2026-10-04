@@ -624,6 +624,17 @@ fn schema_has_type(schema: &Value, expected: &str) -> bool {
     })
 }
 
+/// Whether an undeclared function name is a plausible identifier: an ASCII letter or `_`,
+/// then up to 127 ASCII letters, digits or `_ . : -`. Markup and prose are not names.
+fn is_plausible_tool_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && name.len() <= 128
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+}
+
 /// Parse a single GLM-4.7 tool call block
 /// Format: <tool_call>function_name<arg_key>key1</arg_key><arg_value>value1</arg_value>...</tool_call>
 fn parse_tool_call_block(
@@ -702,10 +713,19 @@ fn parse_tool_call_block(
 
     // A call to a tool the request does not declare is still the model's tool call:
     // return it with the name and arguments as written. Dropping it here left the
-    // response with neither content nor tool_calls, and inside the bare-body recovery
-    // the error discarded every other call in the message too. Arguments of an
-    // undeclared tool have no schema, so `coerce_value` keeps strings as written and
-    // parses only values that are already JSON.
+    // response with neither content nor tool_calls. Arguments of an undeclared tool have
+    // no schema, so `coerce_value` keeps strings as written and parses only values that
+    // are already JSON. An undeclared name must look like an identifier, though: markup
+    // that lost its `<tool_call>` opener (a provider's broken output) otherwise yields a
+    // "name" such as `1024</arg_value>`, and that block stays unparseable.
+    let declared = tools.is_some_and(|tools| tools.iter().any(|t| t.name == function_name));
+    if !declared && !is_plausible_tool_name(&function_name) {
+        anyhow::bail!(
+            "Function '{}' is not declared and is not an identifier",
+            truncate_for_log(&function_name)
+        );
+    }
+
     Ok(ToolCallResponse {
         id: Uuid::new_v4().to_string(),
         tp: ToolCallType::Function,
@@ -1145,6 +1165,68 @@ mod tests {
         assert_eq!(calls[0].function.arguments, r#"{"prompt":"a cat"}"#);
         assert_eq!(calls[1].function.arguments, r#"{"queries":["cat logo"]}"#);
         assert_eq!(normal_text.as_deref(), Some("Generating now."));
+    }
+
+    #[test]
+    fn test_undeclared_name_must_be_an_identifier() {
+        assert!(is_plausible_tool_name("img_gen"));
+        assert!(is_plausible_tool_name("functions.search:v2-beta"));
+        assert!(is_plausible_tool_name("_private"));
+        assert!(!is_plausible_tool_name("1024</arg_value>"));
+        assert!(!is_plausible_tool_name("logo</arg_value>"));
+        assert!(!is_plausible_tool_name("2fast"));
+        assert!(!is_plausible_tool_name("a red logo"));
+        assert!(!is_plausible_tool_name(""));
+        assert!(!is_plausible_tool_name(&"a".repeat(129)));
+    }
+
+    #[test]
+    fn test_garbage_named_block_is_dropped() {
+        // A provider returned the call's tail as content without `<tool_call>img_gen`:
+        // the bare-body recovery takes the word before the first marker as the name.
+        // Either the parse fails (the jail then releases no content) or it yields no call.
+        let no_call = |message: &str| {
+            try_tool_call_parse_glm47(message, &get_test_config(), Some(&image_tools())).map_or(
+                true,
+                |(calls, text)| {
+                    calls.is_empty() && !text.unwrap_or_default().contains("</arg_value>")
+                },
+            )
+        };
+        assert!(no_call(
+            "</arg_key><arg_value>1024</arg_value><arg_key>prompt</arg_key><arg_value>A dark logo</arg_value></tool_call>"
+        ));
+        assert!(
+            no_call(
+                "a minimalist logo</arg_value><arg_key>width</arg_key><arg_value>1024</arg_value></tool_call>"
+            ),
+            "`logo</arg_value>` must not become a tool call"
+        );
+        // Inside a complete block the garbage name is dropped like any unparseable block.
+        let message = "<tool_call>768</arg_value><arg_key>prompt</arg_key><arg_value>x</arg_value></tool_call>";
+        let (calls, normal_text) =
+            try_tool_call_parse_glm47(message, &get_test_config(), Some(&image_tools())).unwrap();
+        assert!(calls.is_empty(), "got {calls:?}");
+        assert_eq!(normal_text.as_deref(), Some(""));
+        // Without declared tools a garbage name is not a call either.
+        let message =
+            "<tool_call>logo</arg_value><arg_key>x</arg_key><arg_value>1</arg_value></tool_call>";
+        let (calls, _) = try_tool_call_parse_glm47(message, &get_test_config(), None).unwrap();
+        assert!(calls.is_empty(), "got {calls:?}");
+    }
+
+    #[test]
+    fn test_declared_name_is_not_checked_as_an_identifier() {
+        let tools = vec![ToolDefinition {
+            name: "lookup weather".to_string(),
+            parameters: None,
+            strict: None,
+        }];
+        let message = "<tool_call>lookup weather<arg_key>city</arg_key><arg_value>Paris</arg_value></tool_call>";
+        let (calls, _) =
+            try_tool_call_parse_glm47(message, &get_test_config(), Some(&tools)).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "lookup weather");
     }
 
     #[test]

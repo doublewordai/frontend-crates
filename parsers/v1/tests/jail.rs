@@ -3245,6 +3245,63 @@ mod parallel_jail_tests {
         }
     }
 
+    /// A provider that lost the call's opener returns its tail as content
+    /// (`</arg_key><arg_value>1024</arg_value><arg_key>prompt</arg_key>…</tool_call>`).
+    /// No tool call may come out of it under a name that is not an identifier. (How much
+    /// of such text the jail releases as content depends on the chunking and is unchanged
+    /// here.)
+    #[tokio::test]
+    async fn test_glm47_broken_provider_markup_is_not_a_tool_call() {
+        use dynamo_parsers::tool_calling::ToolDefinition;
+
+        let tool_defs = vec![ToolDefinition {
+            name: "search".to_string(),
+            parameters: Some(serde_json::json!({
+                "type": "object",
+                "properties": {"queries": {"type": "array"}},
+            })),
+            strict: None,
+        }];
+        // A provider's reply (OpenRouter, Together, GLM-5.2) to a K2VV request whose history
+        // called `img_gen`, which the request no longer declares.
+        let text = r#"terrifying Junji Ito horror style darkened Doraemon, flat 2D anime cartoon illustration, no realism. Doraemon reimagined as a nightmarish creature: sunken hollow black eyes with tiny glowing pupils, wide unnatural grin stretching beyond the face with rows of jagged teeth, cracked and peeling blue skin, distorted elongated limbs with bony fingers, the bell on his neck tarnished and rusty with dark veins spreading from it, his pocket warped and gaping like a dark void. Black ink hatching and heavy cross-hatching shading in Junji Ito's signature style, eerie spirals and tentacle-like shadows creeping around him, grotesque and unsettling atmosphere, monochrome with splashes of sickly blue tone, manga horror aesthetic, pure nightmare fuel, flat 2D illustration style</arg_value><arg_key>width</arg_key><arg_value>1024</arg_value><arg_key>height</arg_key><arg_value>768</arg_value></tool_call>"#;
+        for size in [3, 7, 16, 32, 64, text.len()] {
+            let chunks: Vec<_> = text
+                .as_bytes()
+                .chunks(size)
+                .map(|c| {
+                    test_utils::create_mock_response_chunk(
+                        String::from_utf8(c.to_vec()).unwrap(),
+                        0,
+                    )
+                })
+                .collect();
+            let jail = JailedStream::builder()
+                .tool_call_parser("glm47")
+                .tool_definitions(tool_defs.clone())
+                .build();
+            let results: Vec<_> = jail
+                .apply_with_finish_reason(stream::iter(chunks))
+                .collect()
+                .await;
+            for result in &results {
+                for choice in &result.data.as_ref().unwrap().choices {
+                    for call in choice.delta.tool_calls.iter().flatten() {
+                        let name = call
+                            .function
+                            .as_ref()
+                            .and_then(|f| f.name.clone())
+                            .unwrap_or_default();
+                        assert!(
+                            !name.contains('<') && !name.contains('>'),
+                            "chunk size {size}: tool call named {name:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     // =============================================================================
     // 2. PARALLEL TOOL CALLS ACROSS MULTIPLE CHUNKS (STREAMING)
     // =============================================================================
