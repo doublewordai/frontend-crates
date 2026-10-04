@@ -356,8 +356,7 @@ pub fn parse_tool_call_block(
             let param_value = param_cap.get(2).map(|m| m.as_str()).unwrap_or("");
 
             if !param_name.is_empty() {
-                let parsed_value =
-                    convert_param_value(param_value, param_name, &param_config, function_name);
+                let parsed_value = convert_param_value(param_value, param_name, &param_config);
                 parameters.insert(param_name.to_string(), parsed_value);
             }
         }
@@ -413,7 +412,10 @@ fn get_arguments_config(
         }
     }
 
-    tracing::warn!("Tool '{}' is not defined in the tools list.", func_name);
+    tracing::warn!(
+        tool_name_len = func_name.len(),
+        "Tool is not defined in the tools list."
+    );
     HashMap::new()
 }
 
@@ -505,7 +507,6 @@ fn convert_param_value(
     param_value: &str,
     param_name: &str,
     param_config: &HashMap<String, Value>,
-    func_name: &str,
 ) -> ParsedValue {
     // HTML unescape and trim
     let param_value = html_unescape(param_value.trim());
@@ -518,9 +519,8 @@ fn convert_param_value(
     // Check if parameter is in config
     if !param_config.contains_key(param_name) {
         tracing::debug!(
-            "Parsed parameter '{}' is not defined in the tool parameters for tool '{}', directly returning the string value.",
-            param_name,
-            func_name
+            param_name_len = param_name.len(),
+            "Parsed parameter is not defined in the tool parameters, directly returning the string value."
         );
         return Value::String(param_value).into();
     }
@@ -578,10 +578,9 @@ fn convert_param_value(
                 Some(coerced) => coerced,
                 None => {
                     tracing::warn!(
-                        "Parsed value '{}' of parameter '{}' is not an integer in tool '{}', degenerating to string.",
-                        param_value,
-                        param_name,
-                        func_name
+                        expected_type = "integer",
+                        value_len = param_value.len(),
+                        "Parsed parameter value is not an integer, degenerating to string."
                     );
                     Value::String(param_value).into()
                 }
@@ -618,20 +617,18 @@ fn convert_param_value(
                             Value::Number(num).into()
                         } else {
                             tracing::warn!(
-                                "Parsed value '{}' of parameter '{}' is not a valid float in tool '{}', degenerating to string.",
-                                param_value,
-                                param_name,
-                                func_name
+                                expected_type = "number",
+                                value_len = param_value.len(),
+                                "Parsed parameter value is not a valid float, degenerating to string."
                             );
                             Value::String(param_value).into()
                         }
                     }
                     Err(_) => {
                         tracing::warn!(
-                            "Parsed value '{}' of parameter '{}' is not a float in tool '{}', degenerating to string.",
-                            param_value,
-                            param_name,
-                            func_name
+                            expected_type = "number",
+                            value_len = param_value.len(),
+                            "Parsed parameter value is not a float, degenerating to string."
                         );
                         Value::String(param_value).into()
                     }
@@ -645,10 +642,9 @@ fn convert_param_value(
             let lower_val = param_value.to_lowercase();
             if lower_val != "true" && lower_val != "false" {
                 tracing::warn!(
-                    "Parsed value '{}' of parameter '{}' is not a boolean (`true` or `false`) in tool '{}', degenerating to false.",
-                    param_value,
-                    param_name,
-                    func_name
+                    expected_type = "boolean",
+                    value_len = param_value.len(),
+                    "Parsed parameter value is not a boolean (`true` or `false`), degenerating to false."
                 );
             }
             Value::Bool(lower_val == "true").into()
@@ -671,10 +667,9 @@ fn convert_param_value(
             }
 
             tracing::warn!(
-                "Parsed value '{}' of parameter '{}' cannot be parsed with json.loads in tool '{}', will try other methods to parse it.",
-                param_value,
-                param_name,
-                func_name
+                expected_type = "object_or_array",
+                value_len = param_value.len(),
+                "Parsed parameter value cannot be parsed with json.loads, will try other methods to parse it."
             );
 
             // Try `ast.literal_eval` equivalent (handles Python-style single quotes, etc.).
@@ -683,10 +678,9 @@ fn convert_param_value(
             }
 
             tracing::warn!(
-                "Parsed value '{}' of parameter '{}' cannot be converted via Python `ast.literal_eval()` in tool '{}', degenerating to string.",
-                param_value,
-                param_name,
-                func_name
+                expected_type = "object_or_array",
+                value_len = param_value.len(),
+                "Parsed parameter value cannot be converted via Python `ast.literal_eval()`, degenerating to string."
             );
             Value::String(param_value).into()
         }
@@ -700,10 +694,9 @@ fn convert_param_value(
             }
 
             tracing::warn!(
-                "Parsed value '{}' of parameter '{}' cannot be converted via Python `ast.literal_eval()` in tool '{}', degenerating to string.",
-                param_value,
-                param_name,
-                func_name
+                expected_type = "unrecognized",
+                value_len = param_value.len(),
+                "Parsed parameter value cannot be converted via Python `ast.literal_eval()`, degenerating to string."
             );
             Value::String(param_value).into()
         }
@@ -1036,13 +1029,13 @@ mod coderabbit_fix_tests {
     fn large_integer_schema_value_stays_a_number() {
         let cfg = one_param("x", json!({"type": "integer"}));
         // 21 digits — well past i64::MAX. Old code degenerated this to a string.
-        let pv = convert_param_value("123456789012345678901", "x", &cfg, "f");
+        let pv = convert_param_value("123456789012345678901", "x", &cfg);
         assert_eq!(ser(&pv), "123456789012345678901");
         assert_ne!(ser(&pv), "\"123456789012345678901\"");
 
         // In-range integers and non-numeric fallback still behave.
-        assert_eq!(ser(&convert_param_value("42", "x", &cfg, "f")), "42");
-        assert_eq!(ser(&convert_param_value("abc", "x", &cfg, "f")), "\"abc\"");
+        assert_eq!(ser(&convert_param_value("42", "x", &cfg)), "42");
+        assert_eq!(ser(&convert_param_value("abc", "x", &cfg)), "\"abc\"");
     }
 
     // Finding 2: Python keyword rewrites must not touch quoted string contents.
@@ -1057,7 +1050,7 @@ mod coderabbit_fix_tests {
 
         // Full path through convert_param_value with an object schema.
         let cfg = one_param("x", json!({"type": "object"}));
-        let pv = convert_param_value("{'message': 'True story'}", "x", &cfg, "f");
+        let pv = convert_param_value("{'message': 'True story'}", "x", &cfg);
         assert_eq!(ser(&pv), r#"{"message":"True story"}"#);
         // The previously-wrong "true story" must NOT appear.
         assert!(!ser(&pv).contains("true story"));
@@ -1071,7 +1064,7 @@ mod coderabbit_fix_tests {
             "x",
             json!({"anyOf": [{"type": "string"}, {"type": "null"}]}),
         );
-        let pv = convert_param_value("42", "x", &cfg, "f");
+        let pv = convert_param_value("42", "x", &cfg);
         assert_eq!(ser(&pv), "\"42\"");
         assert_ne!(ser(&pv), "42");
 
@@ -1080,7 +1073,7 @@ mod coderabbit_fix_tests {
             "x",
             json!({"anyOf": [{"type": "integer"}, {"type": "null"}]}),
         );
-        assert_eq!(ser(&convert_param_value("42", "x", &cfg, "f")), "42");
+        assert_eq!(ser(&convert_param_value("42", "x", &cfg)), "42");
 
         // oneOf [object, null] + object literal: still JSON-parsed.
         let cfg = one_param(
@@ -1088,20 +1081,20 @@ mod coderabbit_fix_tests {
             json!({"oneOf": [{"type": "object"}, {"type": "null"}]}),
         );
         assert_eq!(
-            ser(&convert_param_value("{\"a\": 1}", "x", &cfg, "f")),
+            ser(&convert_param_value("{\"a\": 1}", "x", &cfg)),
             r#"{"a":1}"#
         );
 
         // type: ["number", "null"] + "3.14": becomes a float.
         let cfg = one_param("x", json!({"type": ["number", "null"]}));
-        assert_eq!(ser(&convert_param_value("3.14", "x", &cfg, "f")), "3.14");
+        assert_eq!(ser(&convert_param_value("3.14", "x", &cfg)), "3.14");
 
         // No alternative matches "42" -> documented string fallback.
         let cfg = one_param(
             "x",
             json!({"anyOf": [{"type": "boolean"}, {"type": "null"}]}),
         );
-        assert_eq!(ser(&convert_param_value("42", "x", &cfg, "f")), "\"42\"");
+        assert_eq!(ser(&convert_param_value("42", "x", &cfg)), "\"42\"");
     }
 
     fn bare_config() -> XmlParserConfig {

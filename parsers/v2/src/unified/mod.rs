@@ -647,7 +647,9 @@ pub fn assemble(deltas: &[UnifiedParserEvent]) -> Vec<UnifiedEvent> {
                 if !raw.trim().is_empty() {
                     tracing::warn!(
                         why = "unified_unparseable_tool_arguments",
-                        error = %e,
+                        error_category = ?e.classify(),
+                        error_line = e.line(),
+                        error_column = e.column(),
                         argument_bytes = raw.len(),
                         "tool-call arguments did not parse as JSON; emitting an empty object"
                     );
@@ -4430,7 +4432,6 @@ impl GuidedState {
                         tracing::warn!(
                             why = "unified_guided_call_became_ambiguous_after_commit",
                             tool_index = index,
-                            name = %committed.name,
                             "a second argument alias appeared after this call was \
                              streamed; it cannot be withdrawn"
                         );
@@ -4463,11 +4464,10 @@ impl GuidedState {
                     out.push(UnifiedParserEvent::Text(element.raw));
                 }
                 // Invalid, but already streamed. A fragment cannot be unsaid.
-                (None, Some(committed)) => {
+                (None, Some(_)) => {
                     tracing::warn!(
                         why = "unified_guided_streamed_call_failed_validation",
                         tool_index = index,
-                        name = %committed.name,
                         "this call was streamed before it could be judged invalid; \
                          it stays on the wire"
                     );
@@ -4493,14 +4493,14 @@ impl GuidedState {
     /// bytes that fell OUTSIDE the argument object, which were never released and
     /// are not arguments.
     fn settle_streamed_named(&self) -> Vec<UnifiedParserEvent> {
-        let Some(named_tool) = self.named_tool.as_deref() else {
+        if self.named_tool.is_none() {
             return Vec::new();
-        };
+        }
         let mut output = Vec::new();
         if let Ok(obj) =
             serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(self.json.trim())
         {
-            warn_if_named_payload_looks_like_an_envelope(named_tool, &obj);
+            warn_if_named_payload_looks_like_an_envelope(&obj);
             output.push(UnifiedParserEvent::ToolCall(ToolCallDelta {
                 tool_index: 0,
                 name: None,
@@ -4516,7 +4516,6 @@ impl GuidedState {
         }
         tracing::warn!(
             why = "unified_guided_named_payload_has_trailing_bytes",
-            named_tool = %named_tool,
             remainder_bytes = remainder.len(),
             "bytes followed the named-choice argument object; emitting them as text"
         );
@@ -4578,7 +4577,6 @@ impl GuidedState {
                     } else {
                         "required"
                     },
-                    named_tool = self.named_tool.as_deref().unwrap_or("-"),
                     stripped_markup = true,
                     "guided output contained no JSON payload, only control markup; \
                      emitting nothing (is the backend's guided decoding actually on?)"
@@ -4612,7 +4610,7 @@ impl GuidedState {
                 serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(payload)
                     .ok()
                     .map(|obj| {
-                        warn_if_named_payload_looks_like_an_envelope(name, &obj);
+                        warn_if_named_payload_looks_like_an_envelope(&obj);
                         vec![GuidedCall {
                             name: name.clone(),
                             arguments: raw_payload.clone(),
@@ -4661,7 +4659,6 @@ impl GuidedState {
                     } else {
                         "required"
                     },
-                    named_tool = self.named_tool.as_deref().unwrap_or("-"),
                     payload_bytes = payload.len(),
                     payload_kind = json_payload_kind(payload),
                     "guided output did not parse as a tool call after fragments were \
@@ -4681,7 +4678,6 @@ impl GuidedState {
                     } else {
                         "required"
                     },
-                    named_tool = self.named_tool.as_deref().unwrap_or("-"),
                     payload_bytes = payload.len(),
                     payload_kind = json_payload_kind(payload),
                     "guided output did not parse as a tool call; emitting it as text"
@@ -4745,15 +4741,11 @@ struct GuidedElement {
 /// One implementation, because BOTH named paths reach it now: the buffered
 /// completion path and the streamed one, which has already put these very bytes on
 /// the wire and can only report the suspicion, not act on it.
-fn warn_if_named_payload_looks_like_an_envelope(
-    named_tool: &str,
-    obj: &serde_json::Map<String, serde_json::Value>,
-) {
+fn warn_if_named_payload_looks_like_an_envelope(obj: &serde_json::Map<String, serde_json::Value>) {
     if obj.contains_key("name") && (obj.contains_key("arguments") || obj.contains_key("parameters"))
     {
         tracing::warn!(
             why = "guided_named_payload_looks_like_an_envelope",
-            named_tool = %named_tool,
             "named-choice payload carries `name` plus `arguments`/`parameters`; forwarding it verbatim as the argument set"
         );
     }
@@ -5087,15 +5079,13 @@ impl DebugUnifiedParser {
         if deltas.is_empty() {
             return;
         }
+        // Counts only: names and text are model output and stay out of logs.
         let calls = deltas
             .iter()
-            .filter_map(|d| match d {
-                UnifiedParserEvent::ToolCall(c) => Some(c.name.as_deref().unwrap_or("…")),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+            .filter(|d| matches!(d, UnifiedParserEvent::ToolCall(_)))
+            .count();
         crate::tool_calling::debug::emit(format_args!(
-            "UNIFIED family={} {} emitted {} delta(s) calls={:?}",
+            "UNIFIED family={} {} emitted {} delta(s) tool_call_deltas={}",
             self.family,
             method,
             deltas.len(),
@@ -5106,16 +5096,13 @@ impl DebugUnifiedParser {
 
 impl UnifiedParser for DebugUnifiedParser {
     fn initialize_request(&mut self, init: UnifiedParserInit) -> Result<()> {
+        // The named tool comes from the request, so only the mode is logged.
         let mode = match &init.tool_output_mode {
-            UnifiedToolOutputMode::Native => "native".to_string(),
+            UnifiedToolOutputMode::Native => "native",
             UnifiedToolOutputMode::GuidedJson {
-                named_tool: Some(n),
-            } => {
-                format!("guided_json(named={n})")
-            }
-            UnifiedToolOutputMode::GuidedJson { named_tool: None } => {
-                "guided_json(required)".to_string()
-            }
+                named_tool: Some(_),
+            } => "guided_json(named)",
+            UnifiedToolOutputMode::GuidedJson { named_tool: None } => "guided_json(required)",
         };
         crate::tool_calling::debug::emit(format_args!(
             "UNIFIED family={} initialize prompt_token_ids_len={} starting_state={:?} tool_output_mode={} invalid_guided_payload={:?}",

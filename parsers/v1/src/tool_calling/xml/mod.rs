@@ -24,6 +24,7 @@ impl Serialize for OrderedArguments<'_> {
 }
 
 pub use super::response;
+pub(crate) use glm47_parser::BlockError as Glm47BlockError;
 pub use glm47_parser::{
     detect_tool_call_start_glm47, find_tool_call_end_position_glm47, try_tool_call_parse_glm47,
 };

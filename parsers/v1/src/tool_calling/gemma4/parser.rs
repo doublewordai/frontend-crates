@@ -51,18 +51,18 @@ fn parse_gemma_call_parts(
         && !tools.iter().any(|t| t.name == name)
     {
         tracing::warn!(
-            "Tool '{}' is not defined in the tools list (Gemma 4 parser).",
-            name
+            tool_name_len = name.len(),
+            "Tool is not defined in the tools list (Gemma 4 parser)."
         );
     }
 
     let args_value = match parse_args_object(args_raw) {
         Ok(v) => v,
-        Err(e) => {
+        Err(_) => {
+            // The parse error quotes the argument text, so log only its size.
             tracing::warn!(
-                "Failed to parse Gemma 4 args for '{}': {}. Falling back to empty object.",
-                name,
-                e
+                args_len = args_raw.len(),
+                "Failed to parse Gemma 4 args. Falling back to empty object."
             );
             Value::Object(Map::new())
         }
@@ -420,15 +420,13 @@ pub fn try_tool_call_parse_gemma4(
         if has_markup {
             // Recovery: malformed/truncated/orphan-close/no-body shapes.
             // Suppress the whole message so tool-call markup doesn't leak.
-            let preview: String = message.chars().take(120).collect();
             tracing::warn!(
                 why = "no_calls_with_markup",
                 stripped_bytes = message.len(),
                 has_start = message.contains(TOOL_CALL_START),
                 has_end = message.contains(TOOL_CALL_END),
                 has_string_delim = message.contains(STRING_DELIM),
-                "gemma4 strip (recovery): zero calls extracted but gemma4 markup present (<|tool_call>, <tool_call|>, <|\"|>); suppressing entire message to prevent leak into normal_text. preview={:?}",
-                preview
+                "gemma4 strip (recovery): zero calls extracted but gemma4 markup present (<|tool_call>, <tool_call|>, <|\"|>); suppressing entire message to prevent leak into normal_text"
             );
             String::new()
         } else {
@@ -443,14 +441,12 @@ pub fn try_tool_call_parse_gemma4(
         match first_tool_start {
             Some(idx) => {
                 let stripped = &message[idx..];
-                let preview: String = stripped.chars().take(120).collect();
                 tracing::debug!(
                     why = "prefix_only_contract",
                     n_calls = calls.len(),
                     kept_prefix_bytes = idx,
                     stripped_bytes = stripped.len(),
-                    "gemma4 strip (success): kept prefix before first <|tool_call>; dropped parsed-call(s) + any inter-call / trailing narration. preview={:?}",
-                    preview
+                    "gemma4 strip (success): kept prefix before first <|tool_call>; dropped parsed-call(s) + any inter-call / trailing narration"
                 );
                 message[..idx].trim().to_string()
             }

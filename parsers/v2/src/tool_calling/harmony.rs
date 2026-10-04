@@ -126,8 +126,12 @@ impl HarmonyToolStreamParser {
                 self.pending_token_ids.clear();
                 self.parse_tool_call_streaming_text(&text)
             }
-            Err(e) => {
-                tracing::warn!("harmony decode pending token stream failed: {e}");
+            Err(_) => {
+                // The decode error quotes the offending token id.
+                tracing::warn!(
+                    pending_tokens = self.pending_token_ids.len(),
+                    "harmony decode pending token stream failed"
+                );
                 ToolStreamResult::default()
             }
         }
@@ -147,8 +151,12 @@ impl HarmonyToolStreamParser {
                     self.scan_buffer.push_str(&text);
                     self.pending_token_ids.clear();
                 }
-                Err(e) => {
-                    tracing::warn!("harmony decode failed while finishing token stream: {e}");
+                Err(_) => {
+                    // The decode error quotes the offending token id.
+                    tracing::warn!(
+                        pending_tokens = self.pending_token_ids.len(),
+                        "harmony decode failed while finishing token stream"
+                    );
                     self.pending_token_ids.clear();
                 }
             }

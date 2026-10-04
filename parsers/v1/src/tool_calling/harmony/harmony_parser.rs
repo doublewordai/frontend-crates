@@ -106,17 +106,44 @@ fn record_special_tokens(text: &str, items: &mut Vec<String>) {
     }
 }
 
+/// A content-free label for a Harmony parse error (`StreamableParser::process`,
+/// `parse_messages_from_completion_tokens`). Their messages quote token ids,
+/// role strings and header text from the model output, so logs carry this
+/// label instead.
+pub(crate) fn harmony_error_kind(e: &anyhow::Error) -> &'static str {
+    let message = e.to_string();
+    [
+        ("Unexpected token", "unexpected_token"),
+        ("Unexpected EOS", "unexpected_eos"),
+        ("Unknown role", "unknown_role"),
+        (
+            "unexpected tokens remaining in message header",
+            "trailing_header_tokens",
+        ),
+        ("could not decode header", "undecodable_header"),
+        (
+            "channel marker present but no channel value",
+            "missing_channel",
+        ),
+        ("message header did not contain a role", "missing_role"),
+    ]
+    .into_iter()
+    .find(|(prefix, _)| message.starts_with(prefix))
+    .map_or("other", |(_, kind)| kind)
+}
+
 fn strip_harmony_protocol_from_normal_text(text: &str, reason: &'static str) -> String {
     let mut stripped = Vec::new();
 
     let cleaned = commentary_block_cleanup_regex()
         .replace_all(text, |caps: &Captures<'_>| {
             record_special_tokens(&caps[0], &mut stripped);
-            let item = match caps.name("name").map(|m| m.as_str()) {
-                Some(name) => format!("commentary_tool_call:functions.{name}"),
-                None => "commentary_tool_call:missing_recipient".to_string(),
+            let item = if caps.name("name").is_some() {
+                "commentary_tool_call"
+            } else {
+                "commentary_tool_call:missing_recipient"
             };
-            push_unique(&mut stripped, item);
+            push_unique(&mut stripped, item.to_string());
             ""
         })
         .into_owned();
@@ -124,11 +151,12 @@ fn strip_harmony_protocol_from_normal_text(text: &str, reason: &'static str) -> 
     let cleaned = commentary_header_cleanup_regex()
         .replace_all(&cleaned, |caps: &Captures<'_>| {
             record_special_tokens(&caps[0], &mut stripped);
-            let item = match caps.name("name").map(|m| m.as_str()) {
-                Some(name) => format!("commentary_tool_call_without_message:functions.{name}"),
-                None => "commentary_tool_call_without_message:missing_recipient".to_string(),
+            let item = if caps.name("name").is_some() {
+                "commentary_tool_call_without_message"
+            } else {
+                "commentary_tool_call_without_message:missing_recipient"
             };
-            push_unique(&mut stripped, item);
+            push_unique(&mut stripped, item.to_string());
             ""
         })
         .into_owned();
@@ -136,11 +164,12 @@ fn strip_harmony_protocol_from_normal_text(text: &str, reason: &'static str) -> 
     let cleaned = analysis_block_cleanup_regex()
         .replace_all(&cleaned, |caps: &Captures<'_>| {
             record_special_tokens(&caps[0], &mut stripped);
-            let item = match caps.name("name").map(|m| m.as_str()) {
-                Some(name) => format!("analysis_tool_call:functions.{name}"),
-                None => "analysis_envelope".to_string(),
+            let item = if caps.name("name").is_some() {
+                "analysis_tool_call"
+            } else {
+                "analysis_envelope"
             };
-            push_unique(&mut stripped, item);
+            push_unique(&mut stripped, item.to_string());
             ""
         })
         .into_owned();
@@ -360,7 +389,8 @@ pub async fn parse_tool_calls_harmony_complete(
         Ok(messages) => messages,
         Err(e) => {
             tracing::debug!(
-                "Failed to parse messages from completion tokens: {e}. Falling back to regex extraction."
+                error_kind = harmony_error_kind(&e),
+                "Failed to parse messages from completion tokens. Falling back to regex extraction."
             );
             // Recovery: harmony rejects parallel commentary blocks even when
             // every call is explicitly closed. Only EOF/truncated recovery is

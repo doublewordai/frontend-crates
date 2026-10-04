@@ -72,17 +72,14 @@ impl DebugToolParser {
         if result.calls.is_empty() {
             return;
         }
-        let names: Vec<&str> = result
-            .calls
-            .iter()
-            .filter_map(|c| c.name.as_deref())
-            .collect();
+        // Counts only: tool names are model output and stay out of logs.
+        let named = result.calls.iter().filter(|c| c.name.is_some()).count();
         emit(format_args!(
-            "family={} {} emitted {} call update(s) names={:?}",
+            "family={} {} emitted {} call update(s) named={}",
             self.family,
             method,
             result.calls.len(),
-            names
+            named
         ));
     }
 }

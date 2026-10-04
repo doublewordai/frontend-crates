@@ -944,10 +944,10 @@ impl ChoiceJailState {
                     self.partial_match_buffer = partial;
 
                     tracing::trace!(
-                        "Choice {} holding partial '{}' for patterns: {:?}",
-                        choice.index,
-                        self.partial_match_buffer,
-                        possible_patterns
+                        choice_index = choice.index,
+                        partial_len = self.partial_match_buffer.len(),
+                        candidate_patterns = possible_patterns.len(),
+                        "holding a partial jail marker"
                     );
                 }
 
@@ -1144,6 +1144,27 @@ pub struct JailedStream {
     /// of this jail (one terminal delta becomes many), so the serving layer opts in
     /// per request rather than inheriting it. Mirrors `StreamBestEffort` in v2.
     guided_streaming: bool,
+}
+
+/// A content-free label for a tool-call parser error. Parser error messages
+/// can quote model output (a function name, a JSON value), so logs carry this
+/// label instead of the message.
+fn parse_error_kind(e: &anyhow::Error) -> &'static str {
+    if let Some(e) = e.downcast_ref::<crate::tool_calling::xml::Glm47BlockError>() {
+        return e.kind();
+    }
+    if let Some(e) = e.downcast_ref::<serde_json::Error>() {
+        return match e.classify() {
+            serde_json::error::Category::Io => "json_io",
+            serde_json::error::Category::Syntax => "json_syntax",
+            serde_json::error::Category::Data => "json_data",
+            serde_json::error::Category::Eof => "json_eof",
+        };
+    }
+    if e.is::<regex::Error>() {
+        return "regex";
+    }
+    "other"
 }
 
 impl JailedStream {
@@ -1809,13 +1830,14 @@ impl JailedStream {
                         // If a named tool filter is set (tool_choice=named + parser path), reject
                         // tool calls that don't match the required tool name.
                         let tool_calls = if let Some(ref required_name) = self.named_tool_name {
+                            let tool_call_count = tool_calls.len();
                             let filtered: Vec<_> = tool_calls
                                 .into_iter()
                                 .filter(|tc| tc.function.name == *required_name)
                                 .collect();
                             if filtered.is_empty() {
                                 tracing::warn!(
-                                    required = %required_name,
+                                    parsed_calls = tool_call_count,
                                     "tool_choice=named: parser emitted no matching tool calls; dropping jail output"
                                 );
                             }
@@ -1947,7 +1969,9 @@ impl JailedStream {
                         // surfacing those to the user is the leak we're guarding against.
                         // The warn! gives operators visibility into the failure.
                         tracing::warn!(
-                            error = %e,
+                            error_kind = parse_error_kind(&e),
+                            parser = self.tool_call_parser.as_deref().unwrap_or("default"),
+                            buffered_len = accumulated_content.len(),
                             "tool-call parser errored; dropping buffered content to avoid marker leak"
                         );
                         create_choice_stream(
@@ -2068,7 +2092,7 @@ impl JailedStream {
                     if pre_filter_len > 0 && tool_call_chunks.is_empty() {
                         filter_dropped_all = true;
                         tracing::warn!(
-                            required = %required_name,
+                            parsed_calls = pre_filter_len,
                             "tool_choice=named: parsers emitted no matching tool calls; dropping jail output"
                         );
                     }
@@ -2567,7 +2591,7 @@ impl JailedStreamBuilder {
             MarkerMatcher::new(vec!["__NEVER_MATCH__".to_string()])
                 .expect("Failed to create dummy MarkerMatcher")
         } else {
-            tracing::debug!("Creating MarkerMatcher with patterns: {:?}", all_patterns);
+            tracing::debug!(pattern_count = all_patterns.len(), "Creating MarkerMatcher");
             MarkerMatcher::new(all_patterns)
                 .expect("Failed to create MarkerMatcher with configured patterns")
         };

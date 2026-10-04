@@ -613,7 +613,7 @@ pub fn try_tool_call_parse_basic_json(
             }
 
             tracing::warn!(
-                dropped_content = %trimmed,
+                dropped_len = trimmed.len(),
                 "Dropping unparseable tool-call content; wrapper markers stripped, no valid tool call recovered"
             );
             return Ok((vec![], Some(String::new())));

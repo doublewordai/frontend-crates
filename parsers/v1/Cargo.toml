@@ -39,3 +39,4 @@ aho-corasick.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true
+tracing-subscriber.workspace = true

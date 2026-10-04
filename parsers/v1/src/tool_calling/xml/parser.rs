@@ -401,8 +401,7 @@ fn parse_tool_call_block(
             let param_value = param_cap.get(2).map(|m| m.as_str()).unwrap_or("");
 
             if !param_name.is_empty() {
-                let parsed_value =
-                    convert_param_value(param_value, param_name, &param_config, function_name);
+                let parsed_value = convert_param_value(param_value, param_name, &param_config);
                 match parameter_indices.get(param_name).copied() {
                     Some(index) => parameters[index].1 = parsed_value,
                     None => {
@@ -464,7 +463,10 @@ fn get_arguments_config(
         }
     }
 
-    tracing::warn!("Tool '{}' is not defined in the tools list.", func_name);
+    tracing::warn!(
+        tool_name_len = func_name.len(),
+        "Tool is not defined in the tools list."
+    );
     HashMap::new()
 }
 
@@ -556,7 +558,6 @@ fn convert_param_value(
     param_value: &str,
     param_name: &str,
     param_config: &HashMap<String, Value>,
-    func_name: &str,
 ) -> ParsedValue {
     // HTML unescape and trim
     let param_value = html_unescape(param_value.trim());
@@ -569,9 +570,8 @@ fn convert_param_value(
     // Check if parameter is in config
     if !param_config.contains_key(param_name) {
         tracing::debug!(
-            "Parsed parameter '{}' is not defined in the tool parameters for tool '{}', directly returning the string value.",
-            param_name,
-            func_name
+            param_name_len = param_name.len(),
+            "Parsed parameter is not defined in the tool parameters, directly returning the string value."
         );
         return Value::String(param_value).into();
     }
@@ -619,10 +619,9 @@ fn convert_param_value(
                 Ok(int_val) => Value::Number(int_val.into()).into(),
                 Err(_) => {
                     tracing::warn!(
-                        "Parsed value '{}' of parameter '{}' is not an integer in tool '{}', degenerating to string.",
-                        param_value,
-                        param_name,
-                        func_name
+                        expected_type = "integer",
+                        value_len = param_value.len(),
+                        "Parsed parameter value is not an integer, degenerating to string."
                     );
                     Value::String(param_value).into()
                 }
@@ -659,20 +658,18 @@ fn convert_param_value(
                             Value::Number(num).into()
                         } else {
                             tracing::warn!(
-                                "Parsed value '{}' of parameter '{}' is not a valid float in tool '{}', degenerating to string.",
-                                param_value,
-                                param_name,
-                                func_name
+                                expected_type = "number",
+                                value_len = param_value.len(),
+                                "Parsed parameter value is not a valid float, degenerating to string."
                             );
                             Value::String(param_value).into()
                         }
                     }
                     Err(_) => {
                         tracing::warn!(
-                            "Parsed value '{}' of parameter '{}' is not a float in tool '{}', degenerating to string.",
-                            param_value,
-                            param_name,
-                            func_name
+                            expected_type = "number",
+                            value_len = param_value.len(),
+                            "Parsed parameter value is not a float, degenerating to string."
                         );
                         Value::String(param_value).into()
                     }
@@ -686,10 +683,9 @@ fn convert_param_value(
             let lower_val = param_value.to_lowercase();
             if lower_val != "true" && lower_val != "false" {
                 tracing::warn!(
-                    "Parsed value '{}' of parameter '{}' is not a boolean (`true` or `false`) in tool '{}', degenerating to false.",
-                    param_value,
-                    param_name,
-                    func_name
+                    expected_type = "boolean",
+                    value_len = param_value.len(),
+                    "Parsed parameter value is not a boolean (`true` or `false`), degenerating to false."
                 );
             }
             Value::Bool(lower_val == "true").into()
@@ -712,10 +708,9 @@ fn convert_param_value(
             }
 
             tracing::warn!(
-                "Parsed value '{}' of parameter '{}' cannot be parsed with json.loads in tool '{}', will try other methods to parse it.",
-                param_value,
-                param_name,
-                func_name
+                expected_type = "object_or_array",
+                value_len = param_value.len(),
+                "Parsed parameter value cannot be parsed with json.loads, will try other methods to parse it."
             );
 
             // Try `ast.literal_eval` equivalent (handles Python-style single quotes, etc.).
@@ -724,10 +719,9 @@ fn convert_param_value(
             }
 
             tracing::warn!(
-                "Parsed value '{}' of parameter '{}' cannot be converted via Python `ast.literal_eval()` in tool '{}', degenerating to string.",
-                param_value,
-                param_name,
-                func_name
+                expected_type = "object_or_array",
+                value_len = param_value.len(),
+                "Parsed parameter value cannot be converted via Python `ast.literal_eval()`, degenerating to string."
             );
             Value::String(param_value).into()
         }
@@ -741,10 +735,9 @@ fn convert_param_value(
             }
 
             tracing::warn!(
-                "Parsed value '{}' of parameter '{}' cannot be converted via Python `ast.literal_eval()` in tool '{}', degenerating to string.",
-                param_value,
-                param_name,
-                func_name
+                expected_type = "unrecognized",
+                value_len = param_value.len(),
+                "Parsed parameter value cannot be converted via Python `ast.literal_eval()`, degenerating to string."
             );
             Value::String(param_value).into()
         }

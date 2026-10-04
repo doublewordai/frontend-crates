@@ -44,7 +44,10 @@ impl CacheControl {
             Some(other) => match other.parse::<u64>() {
                 Ok(secs) => secs,
                 Err(_) => {
-                    tracing::warn!("Unrecognized TTL '{}', defaulting to 300s", other);
+                    tracing::warn!(
+                        ttl_len = other.len(),
+                        "Unrecognized TTL, defaulting to 300s"
+                    );
                     return MIN_TTL_SECONDS;
                 }
             },
@@ -560,8 +563,8 @@ impl<'de> Deserialize<'de> for AnthropicContentBlock {
             }
             other => {
                 tracing::debug!(
-                    "Unrecognized Anthropic content block type '{}', preserving as Other",
-                    other
+                    type_len = other.len(),
+                    "Unrecognized Anthropic content block type, preserving as Other"
                 );
                 Ok(AnthropicContentBlock::Other(value))
             }

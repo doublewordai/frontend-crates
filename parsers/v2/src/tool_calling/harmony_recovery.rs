@@ -23,11 +23,12 @@ pub(super) fn strip_harmony_protocol_from_normal_text(text: &str, reason: &'stat
     let cleaned = commentary_block_cleanup_regex()
         .replace_all(text, |caps: &Captures<'_>| {
             record_special_tokens(&caps[0], &mut stripped);
-            let item = match caps.name("name").map(|m| m.as_str()) {
-                Some(name) => format!("commentary_tool_call:functions.{name}"),
-                None => "commentary_tool_call:missing_recipient".to_string(),
+            let item = if caps.name("name").is_some() {
+                "commentary_tool_call"
+            } else {
+                "commentary_tool_call:missing_recipient"
             };
-            push_unique(&mut stripped, item);
+            push_unique(&mut stripped, item.to_string());
             ""
         })
         .into_owned();
@@ -35,11 +36,12 @@ pub(super) fn strip_harmony_protocol_from_normal_text(text: &str, reason: &'stat
     let cleaned = commentary_header_cleanup_regex()
         .replace_all(&cleaned, |caps: &Captures<'_>| {
             record_special_tokens(&caps[0], &mut stripped);
-            let item = match caps.name("name").map(|m| m.as_str()) {
-                Some(name) => format!("commentary_tool_call_without_message:functions.{name}"),
-                None => "commentary_tool_call_without_message:missing_recipient".to_string(),
+            let item = if caps.name("name").is_some() {
+                "commentary_tool_call_without_message"
+            } else {
+                "commentary_tool_call_without_message:missing_recipient"
             };
-            push_unique(&mut stripped, item);
+            push_unique(&mut stripped, item.to_string());
             ""
         })
         .into_owned();
