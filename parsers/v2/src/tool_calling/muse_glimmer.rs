@@ -677,7 +677,8 @@ fn normalize_name(emitted: &str, tools: &[ToolDefinition]) -> String {
         return head.to_string();
     }
     tracing::warn!(
-        emitted_name = emitted,
+        emitted_name_len = emitted.len(),
+        registered_tools = registered.len(),
         "Muse Glimmer: emitted tool name does not match any registered tool; passing through unchanged"
     );
     emitted.to_string()

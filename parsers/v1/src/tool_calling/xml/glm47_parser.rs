@@ -17,28 +17,45 @@ use super::OrderedArguments;
 use super::parsed_value::{ParsedValue, coerce_integer_literal};
 use super::response::{CalledFunction, ToolCallResponse, ToolCallType};
 
-/// Render a tool_call block snippet for logs. Bounded so a huge truncated
-/// argument body doesn't blow up the log line; control chars are escaped
-/// because raw newlines/tabs make the warning unreadable in grep/jq.
-fn truncate_for_log(s: &str) -> String {
-    const MAX: usize = 200;
-    let mut out = String::with_capacity(MAX.min(s.len()) + 16);
-    let mut bytes = 0usize;
-    for ch in s.chars() {
-        if bytes >= MAX {
-            out.push('…');
-            break;
-        }
-        match ch {
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c => out.push(c),
-        }
-        bytes += ch.len_utf8();
-    }
-    out
+/// Why a GLM-4.7 tool_call block failed to parse. The messages match the ones
+/// the parser has always returned; [`BlockError::kind`] is the content-free
+/// label used in logs, since a message can quote the function name.
+#[derive(Debug)]
+pub(crate) enum BlockError {
+    InvalidFormat,
+    EmptyFunctionName,
+    UndeclaredFunction(String),
+    Pattern(regex::Error),
+    Arguments(serde_json::Error),
 }
+
+impl BlockError {
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            BlockError::InvalidFormat => "invalid_block_format",
+            BlockError::EmptyFunctionName => "empty_function_name",
+            BlockError::UndeclaredFunction(_) => "undeclared_function",
+            BlockError::Pattern(_) => "argument_pattern",
+            BlockError::Arguments(_) => "argument_serialization",
+        }
+    }
+}
+
+impl std::fmt::Display for BlockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BlockError::InvalidFormat => f.write_str("Invalid tool call block format"),
+            BlockError::EmptyFunctionName => f.write_str("Empty function name in tool call"),
+            BlockError::UndeclaredFunction(name) => {
+                write!(f, "Function '{name}' not found in available tools")
+            }
+            BlockError::Pattern(e) => e.fmt(f),
+            BlockError::Arguments(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for BlockError {}
 
 /// Check if a chunk contains the start of a GLM-4.7 tool call.
 /// Format: <tool_call>function_name<arg_key>...</arg_key><arg_value>...</arg_value></tool_call>
@@ -193,7 +210,8 @@ fn extract_tool_calls(
         }
         warn!(
             why = "GLM-4.7 tool-call marker found without <tool_call> start; dropping orphan marker tail so wire tags do not leak into normal_text",
-            dropped_block = %truncate_for_log(&text[marker_idx..]),
+            dropped_block_len = text.len() - marker_idx,
+            marker_offset = marker_idx,
             "GLM-4.7 parser dropping orphan tool-call marker tail"
         );
         return Ok((orphan_glm47_prefix(text, marker_idx), calls));
@@ -238,12 +256,13 @@ fn extract_tool_calls(
                     Ok(parsed_call) => calls.push(parsed_call),
                     Err(e) => {
                         warn!(
-                            reason = %e,
+                            reason = e.kind(),
                             why = "block has open + close fence but content failed to parse \
                                    as a GLM-4.7 tool call (e.g. empty function name, \
                                    missing <arg_key>, malformed args); dropping to avoid \
                                    leaking wire tags through normal_text",
-                            dropped_block = %truncate_for_log(block),
+                            dropped_block_len = block.len(),
+                            block_offset = abs_start,
                             "GLM-4.7 parser dropping unparseable tool_call block"
                         );
                     }
@@ -267,12 +286,13 @@ fn extract_tool_calls(
                         }
                         Err(e) => {
                             warn!(
-                                reason = %e,
+                                reason = e.kind(),
                                 why = "EOF recovery enabled and <arg_key> opener present, \
                                        but parse_tool_call_block failed on the truncated \
                                        tail; dropping to avoid leaking wire tags through \
                                        normal_text",
-                                dropped_block = %truncate_for_log(block),
+                                dropped_block_len = block.len(),
+                                block_offset = abs_start,
                                 "GLM-4.7 parser dropping truncated tool_call block (recovery attempt failed)"
                             );
                         }
@@ -290,7 +310,8 @@ fn extract_tool_calls(
                     };
                     warn!(
                         why = %reason,
-                        dropped_block = %truncate_for_log(block),
+                        dropped_block_len = block.len(),
+                        block_offset = abs_start,
                         "GLM-4.7 parser dropping truncated tool_call block (no end fence)"
                     );
                 }
@@ -434,7 +455,8 @@ fn recover_bare_glm47_calls(
         if is_glm47_close_marker_spam(&text[cursor..], config) {
             warn!(
                 why = "orphan_close_marker_spam",
-                dropped_block = %truncate_for_log(&text[cursor..]),
+                dropped_block_len = text.len() - cursor,
+                recovered_calls = calls.len(),
                 "GLM-4.7 parser dropping orphan close-marker spam after recovered bare call"
             );
             break;
@@ -594,7 +616,7 @@ fn parse_tool_call_block(
     block: &str,
     config: &Glm47ParserConfig,
     tools: Option<&[ToolDefinition]>,
-) -> anyhow::Result<ToolCallResponse> {
+) -> Result<ToolCallResponse, BlockError> {
     // Remove the outer <tool_call> tags
     let start_token = &config.tool_call_start;
     let end_token = &config.tool_call_end;
@@ -603,7 +625,7 @@ fn parse_tool_call_block(
     // recover from max_tokens / EOS truncation that drops `</tool_call>`.
     let after_start = block
         .strip_prefix(start_token.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Invalid tool call block format"))?;
+        .ok_or(BlockError::InvalidFormat)?;
     let content = after_start
         .strip_suffix(end_token.as_str())
         .unwrap_or(after_start);
@@ -618,7 +640,7 @@ fn parse_tool_call_block(
     };
 
     if function_name.is_empty() {
-        anyhow::bail!("Empty function name in tool call");
+        return Err(BlockError::EmptyFunctionName);
     }
 
     // Parse key-value pairs, keeping the order the model emitted them in.
@@ -640,7 +662,7 @@ fn parse_tool_call_block(
         arg_key_start_escaped, arg_key_end_escaped, arg_value_start_escaped, arg_value_end_escaped
     );
 
-    let regex = Regex::new(&pattern)?;
+    let regex = Regex::new(&pattern).map_err(BlockError::Pattern)?;
 
     for cap in regex.captures_iter(args_section) {
         let key = cap.get(1).map(|m| m.as_str().trim()).unwrap_or("");
@@ -668,7 +690,7 @@ fn parse_tool_call_block(
     if let Some(tools_list) = tools {
         let tool_exists = tools_list.iter().any(|t| t.name == function_name);
         if !tool_exists {
-            anyhow::bail!("Function '{}' not found in available tools", function_name);
+            return Err(BlockError::UndeclaredFunction(function_name));
         }
     }
 
@@ -677,7 +699,8 @@ fn parse_tool_call_block(
         tp: ToolCallType::Function,
         function: CalledFunction {
             name: function_name,
-            arguments: serde_json::to_string(&OrderedArguments(&arguments))?,
+            arguments: serde_json::to_string(&OrderedArguments(&arguments))
+                .map_err(BlockError::Arguments)?,
         },
     })
 }

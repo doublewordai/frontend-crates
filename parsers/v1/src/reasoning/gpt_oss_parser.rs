@@ -5,6 +5,7 @@ use std::fmt::Debug;
 
 use crate::ParserResult;
 use crate::ReasoningParser;
+use crate::tool_calling::harmony::harmony_parser::harmony_error_kind;
 
 use openai_harmony::StreamableParser;
 use openai_harmony::chat::{Content, Message, TextContent};
@@ -99,6 +100,17 @@ impl GptOssReasoningParser {
             last_directed_channel: None,
             last_directed_recipient: None,
         })
+    }
+}
+
+/// The Harmony channel name for logs: one of the protocol's own channel names,
+/// or `other` for anything the model invented.
+fn harmony_channel_label(channel: &str) -> &'static str {
+    match channel {
+        "analysis" => "analysis",
+        "commentary" => "commentary",
+        "final" => "final",
+        _ => "other",
     }
 }
 
@@ -358,14 +370,14 @@ impl ReasoningParser for GptOssReasoningParser {
         let parser = &mut self.parser;
 
         for (i, token_id) in token_ids.iter().enumerate() {
-            tracing::debug!(
-                "Processing token {} of {}: {}",
-                i + 1,
-                token_ids.len(),
-                token_id
-            );
+            tracing::debug!("Processing token {} of {}", i + 1, token_ids.len());
             if let Err(e) = parser.process(*token_id) {
-                tracing::warn!("Harmony parse error for token_id {token_id}: {e}");
+                tracing::warn!(
+                    error_kind = harmony_error_kind(&e),
+                    token_position = i,
+                    token_count = token_ids.len(),
+                    "Harmony parse error"
+                );
                 return ParserResult::default();
             }
         }
@@ -460,15 +472,19 @@ impl ReasoningParser for GptOssReasoningParser {
 
         for (i, token_id) in token_ids.iter().enumerate() {
             tracing::debug!(
-                "Processing streaming token {} of {}: {}",
+                "Processing streaming token {} of {}",
                 i + 1,
-                token_ids.len(),
-                token_id
+                token_ids.len()
             );
             let previous_channel = parser.current_channel();
             let previous_recipient = parser.current_recipient();
             if let Err(e) = parser.process(*token_id) {
-                tracing::warn!("Harmony parse error for token_id {token_id}: {e}");
+                tracing::warn!(
+                    error_kind = harmony_error_kind(&e),
+                    token_position = i,
+                    token_count = token_ids.len(),
+                    "Harmony parse error"
+                );
                 return ParserResult::default();
             }
             let current_channel = parser.current_channel();
@@ -679,13 +695,17 @@ impl ReasoningParser for GptOssReasoningParser {
                 //    envelope to recover, so emitting its partial header would leak
                 //    too. Suppressing loses nothing recoverable.
                 tracing::debug!(
-                    "In directed tool-call channel ({channel}); suppressing partial mid-stream \
+                    channel = harmony_channel_label(&channel),
+                    "In directed tool-call channel; suppressing partial mid-stream \
                      content (complete envelope is recovered on the <|call|> chunk)"
                 );
             } else if channel != "analysis" {
                 // Pure analysis reasoning (no recipient) is expected to be silent here —
                 // it was already emitted to reasoning_delta in the per-token loop.
-                tracing::warn!("Shouldn't be delta content after in channel: {}", channel);
+                tracing::warn!(
+                    channel = harmony_channel_label(&channel),
+                    "Shouldn't be delta content after in channel"
+                );
             }
         }
         tracing::debug!("No deltas to return, returning empty result");

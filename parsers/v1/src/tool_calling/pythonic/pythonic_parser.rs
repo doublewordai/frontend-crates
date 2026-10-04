@@ -59,10 +59,7 @@ pub fn parse_tool_calls(src: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
         let mut obj = serde_json::Map::new();
         for keyword in keywords.iter() {
             let Some(arg_ident) = keyword.arg.as_ref() else {
-                tracing::debug!(
-                    "Skipping **kwargs in pythonic tool call for function {}",
-                    name
-                );
+                tracing::debug!(call_index = idx, "Skipping **kwargs in pythonic tool call");
                 continue;
             };
 
@@ -71,7 +68,11 @@ pub fn parse_tool_calls(src: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
                     obj.insert(arg_ident.to_string(), value);
                 }
                 Err(e) => {
-                    tracing::debug!("Skipping non-constant argument {}: {}", arg_ident, e);
+                    tracing::debug!(
+                        call_index = idx,
+                        error = %e,
+                        "Skipping non-constant argument"
+                    );
                 }
             }
         }

@@ -516,8 +516,8 @@ fn parse_section_block(
         } else {
             // Fallback: use the whole ID as the function name
             tracing::warn!(
-                "Unexpected tool_call_id format: '{}', using as-is",
-                function_id
+                tool_call_id_len = function_id.len(),
+                "Unexpected tool_call_id format, using as-is"
             );
             function_id.to_string()
         };
@@ -530,7 +530,10 @@ fn parse_section_block(
         if let Some(tools) = tools
             && !tools.iter().any(|t| t.name == function_name)
         {
-            tracing::warn!("Tool '{}' is not defined in the tools list.", function_name);
+            tracing::warn!(
+                tool_name_len = function_name.len(),
+                "Tool is not defined in the tools list."
+            );
         }
 
         // Validate JSON arguments
@@ -538,9 +541,11 @@ fn parse_section_block(
             Ok(val) => serde_json::to_string(&val)?,
             Err(e) => {
                 tracing::warn!(
-                    "Failed to parse JSON arguments for tool '{}': {}. Using raw string.",
-                    function_name,
-                    e,
+                    error_category = ?e.classify(),
+                    error_line = e.line(),
+                    error_column = e.column(),
+                    arguments_len = arguments_raw.len(),
+                    "Failed to parse JSON arguments. Using raw string."
                 );
                 arguments_raw.to_string()
             }

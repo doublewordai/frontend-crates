@@ -31,18 +31,18 @@ fn parse_gemma_call_parts(
         && !tools.iter().any(|t| t.name == name)
     {
         tracing::warn!(
-            "Tool '{}' is not defined in the tools list (Gemma 4 parser).",
-            name
+            tool_name_len = name.len(),
+            "Tool is not defined in the tools list (Gemma 4 parser)."
         );
     }
 
     let args_value = match parse_args_object(args_raw) {
         Ok(v) => v,
-        Err(e) => {
+        Err(_) => {
+            // The parse error quotes the argument text, so log only its size.
             tracing::warn!(
-                "Failed to parse Gemma 4 args for '{}': {}. Falling back to empty object.",
-                name,
-                e
+                args_len = args_raw.len(),
+                "Failed to parse Gemma 4 args. Falling back to empty object."
             );
             Value::Object(Map::new())
         }

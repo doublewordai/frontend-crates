@@ -532,7 +532,10 @@ fn get_arguments_config(func_name: &str, tools: Option<&[ToolDefinition]>) -> Ma
         }
     }
 
-    tracing::warn!("Tool '{}' is not defined in the tools list.", func_name);
+    tracing::warn!(
+        tool_name_len = func_name.len(),
+        "Tool is not defined in the tools list."
+    );
     Map::new()
 }
 

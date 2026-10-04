@@ -155,7 +155,7 @@ pub(super) fn extract_calls_via_regex(
             tracing::warn!(
                 family = "harmony",
                 reason = "eof_recovered_complete_call_without_call_marker",
-                function = name,
+                function_name_len = name.len(),
                 recovered_bytes = raw_args.len(),
                 "recovered complete Harmony tool call at EOF"
             );
