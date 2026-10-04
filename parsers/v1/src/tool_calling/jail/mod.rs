@@ -1601,6 +1601,30 @@ impl JailedStream {
         .await
     }
 
+    /// Parse the calls a new end marker closed, without the call still open after them.
+    ///
+    /// One multi-token chunk can carry a call's end marker and the next call's start
+    /// marker (`</tool_call><tool_call>` under speculative decoding). Parsing the whole
+    /// buffer at that point hands the parser a call that has not finished yet, and
+    /// parsers that drop an unterminated call log it as truncated although generation
+    /// goes on and the call is released once it closes. Only the closed region (as the
+    /// parser's own end position finds it) is parsed here; if it yields nothing, the
+    /// whole buffer is parsed as before.
+    async fn parse_closed_marker_tool_calls(&self, accumulated_content: &str) -> MarkerParseResult {
+        let closed_end =
+            find_tool_call_end_position(accumulated_content, self.tool_call_parser.as_deref())
+                .filter(|&pos| pos < accumulated_content.len());
+        if let Some(pos) = closed_end
+            && let Ok(parsed) = self
+                .parse_marker_tool_calls(&accumulated_content[..pos])
+                .await
+            && !parsed.0.is_empty()
+        {
+            return Ok(parsed);
+        }
+        self.parse_marker_tool_calls(accumulated_content).await
+    }
+
     async fn completion_from_parsed_tool_calls(
         &self,
         accumulated_content: &str,
@@ -1689,7 +1713,10 @@ impl JailedStream {
                         });
                     }
 
-                    match self.parse_marker_tool_calls(accumulated_content).await {
+                    match self
+                        .parse_closed_marker_tool_calls(accumulated_content)
+                        .await
+                    {
                         Ok(parsed) if !parsed.0.is_empty() => {
                             match self
                                 .completion_from_parsed_tool_calls(accumulated_content, parsed)
@@ -3481,6 +3508,85 @@ mod tests {
             names.contains(&"get_time"),
             "Missing get_time tool call. Got: {:?}",
             names
+        );
+    }
+
+    /// Counts the GLM-4.7 parser's "dropping truncated tool_call" warnings on this thread.
+    struct TruncationWarnings(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for TruncationWarnings {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            struct Message(String);
+            impl tracing::field::Visit for Message {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    if field.name() == "message" {
+                        self.0 = format!("{value:?}");
+                    }
+                }
+            }
+            let mut message = Message(String::new());
+            event.record(&mut message);
+            if message.0.contains("dropping truncated tool_call") {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+    }
+
+    async fn run_glm47_counting_truncation_warnings(
+        chunks: &[&str],
+    ) -> (Vec<(String, String)>, usize) {
+        use tracing_subscriber::layer::SubscriberExt;
+        let warnings = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let subscriber = tracing_subscriber::registry().with(TruncationWarnings(warnings.clone()));
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let jail = JailedStream::builder().tool_call_parser("glm47").build();
+        let input = chunks.iter().map(|c| text_chunk(c)).collect::<Vec<_>>();
+        let responses: Vec<_> = jail
+            .apply_with_finish_reason(Box::pin(stream::iter(input)))
+            .collect()
+            .await;
+        (
+            collect_tool_calls(&responses),
+            warnings.load(std::sync::atomic::Ordering::SeqCst),
+        )
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn glm47_closer_and_next_opener_in_one_chunk_is_not_a_truncation() {
+        // Speculative decoding can deliver `</tool_call><tool_call>` in one chunk. The
+        // first call is complete there and the second is still being generated.
+        let (calls, warnings) = run_glm47_counting_truncation_warnings(&[
+            "<tool_call>get_weather<arg_key>city</arg_key><arg_value>Paris</arg_value>",
+            "</tool_call><tool_call>get_time",
+            "<arg_key>tz</arg_key><arg_value>UTC</arg_value>",
+            "</tool_call>",
+        ])
+        .await;
+        let names: Vec<_> = calls.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["get_weather", "get_time"]);
+        assert_eq!(warnings, 0, "no call was truncated");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn glm47_stream_ending_inside_a_call_still_reports_the_truncation() {
+        let (calls, warnings) = run_glm47_counting_truncation_warnings(&[
+            "<tool_call>get_weather<arg_key>city</arg_key><arg_value>Paris</arg_value>",
+            "</tool_call><tool_call>get_time<arg_key>tz",
+        ])
+        .await;
+        let names: Vec<_> = calls.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["get_weather"]);
+        assert_eq!(
+            warnings, 1,
+            "the unterminated call is dropped once, at the end of the stream"
         );
     }
 
