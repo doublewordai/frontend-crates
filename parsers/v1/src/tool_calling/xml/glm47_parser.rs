@@ -14,7 +14,7 @@ use uuid::Uuid;
 use super::super::ToolDefinition;
 use super::super::config::Glm47ParserConfig;
 use super::OrderedArguments;
-use super::parsed_value::{ParsedValue, coerce_integer_literal};
+use super::parsed_value::{ParsedValue, coerce_integer_literal, is_integer_literal};
 use super::response::{CalledFunction, ToolCallResponse, ToolCallType};
 
 /// Render a tool_call block snippet for logs. Bounded so a huge truncated
@@ -582,46 +582,220 @@ fn coerce_value(raw: &str, schema_type: Option<&str>) -> ParsedValue {
     Value::String(raw.to_string()).into()
 }
 
-/// Look up the JSON Schema type for a parameter by name from a tool's parameter schema.
-fn get_param_schema_type<'a>(
-    tools: Option<&'a [ToolDefinition]>,
-    function_name: &str,
-    param_name: &str,
-) -> Option<&'a str> {
-    let tool = tools?.iter().find(|t| t.name == function_name)?;
-    let schema = tool.parameters.as_ref()?;
-    let props = schema.get("properties")?;
-    let param = props.get(param_name)?;
-    // Prefer string in unions because JSON-looking text is ambiguous.
-    if schema_has_type(param, "string") {
-        return Some("string");
+/// The JSON Schema types a parameter admits, as a bit set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SchemaTypes(u8);
+
+impl SchemaTypes {
+    const NULL: u8 = 1;
+    const BOOLEAN: u8 = 1 << 1;
+    const INTEGER: u8 = 1 << 2;
+    const NUMBER: u8 = 1 << 3;
+    const STRING: u8 = 1 << 4;
+    const ARRAY: u8 = 1 << 5;
+    const OBJECT: u8 = 1 << 6;
+
+    /// The types a `type` name admits (with the aliases `coerce_value` accepts). A number
+    /// admits integers.
+    fn named(name: &str) -> Option<u8> {
+        Some(match name {
+            "null" => Self::NULL,
+            "boolean" | "bool" => Self::BOOLEAN,
+            "integer" | "int" => Self::INTEGER,
+            "number" | "float" | "double" => Self::NUMBER | Self::INTEGER,
+            "string" => Self::STRING,
+            "array" => Self::ARRAY,
+            "object" => Self::OBJECT,
+            _ => return None,
+        })
     }
-    param.get("type")?.as_str()
+
+    /// The types of an `enum` or `const` value. An integral number is also an integer.
+    fn of_value(value: &Value) -> u8 {
+        match value {
+            Value::Null => Self::NULL,
+            Value::Bool(_) => Self::BOOLEAN,
+            Value::Number(n) if n.as_f64().is_some_and(|f| f.fract() != 0.0) => Self::NUMBER,
+            Value::Number(_) => Self::NUMBER | Self::INTEGER,
+            Value::String(_) => Self::STRING,
+            Value::Array(_) => Self::ARRAY,
+            Value::Object(_) => Self::OBJECT,
+        }
+    }
+
+    fn admits(self, types: u8) -> bool {
+        self.0 & types != 0
+    }
+
+    /// The `coerce_value` type name when the set holds a single type.
+    fn single(self) -> Option<&'static str> {
+        Some(match self.0 {
+            Self::NULL => "null",
+            Self::BOOLEAN => "boolean",
+            Self::INTEGER => "integer",
+            Self::NUMBER => "number",
+            t if t == Self::NUMBER | Self::INTEGER => "number",
+            Self::STRING => "string",
+            Self::ARRAY => "array",
+            Self::OBJECT => "object",
+            _ => return None,
+        })
+    }
 }
 
-fn schema_has_type(schema: &Value, expected: &str) -> bool {
-    if let Some(schema_type) = schema.get("type") {
-        if schema_type.as_str() == Some(expected) {
-            return true;
-        }
-        if schema_type
-            .as_array()
-            .is_some_and(|types| types.iter().any(|ty| ty.as_str() == Some(expected)))
+const MAX_SCHEMA_REF_DEPTH: usize = 16;
+const MAX_SCHEMA_NODES: usize = 1024;
+
+/// The types a declared parameter admits. `None` when the tool or the parameter is not
+/// declared, or its schema gives no usable type information.
+fn param_types(
+    tools: Option<&[ToolDefinition]>,
+    function_name: &str,
+    param_name: &str,
+) -> Option<SchemaTypes> {
+    let tool = tools?.iter().find(|t| t.name == function_name)?;
+    let root = tool.parameters.as_ref()?;
+    let param = root.get("properties")?.get(param_name)?;
+    let mut budget = MAX_SCHEMA_NODES;
+    schema_types(param, root, 0, &mut budget)
+}
+
+fn constrain(types: &mut Option<u8>, by: Option<u8>) {
+    if let Some(by) = by {
+        *types = Some(types.map_or(by, |types| types & by));
+    }
+}
+
+/// The types `schema` admits: what its `type`, `enum`, `const`, local `$ref`, `anyOf` and
+/// `oneOf` (the union of the branches) and `allOf` (each branch) allow, intersected. A
+/// keyword without usable type information (an unknown type name, an untyped branch, a
+/// remote or unresolvable reference) does not constrain. `None` when nothing constrains,
+/// when the constraints contradict each other, or when the schema is too deep or too
+/// large to walk.
+fn schema_types(
+    schema: &Value,
+    root: &Value,
+    ref_depth: usize,
+    budget: &mut usize,
+) -> Option<SchemaTypes> {
+    *budget = budget.checked_sub(1)?;
+    let schema = schema.as_object()?;
+    let mut types = None;
+
+    constrain(
+        &mut types,
+        match schema.get("type") {
+            Some(Value::String(name)) => SchemaTypes::named(name),
+            Some(Value::Array(names)) => names.iter().try_fold(0, |acc, name| {
+                name.as_str().and_then(SchemaTypes::named).map(|t| acc | t)
+            }),
+            _ => None,
+        },
+    );
+    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+        constrain(
+            &mut types,
+            Some(
+                values
+                    .iter()
+                    .fold(0, |acc, v| acc | SchemaTypes::of_value(v)),
+            ),
+        );
+    }
+    if let Some(value) = schema.get("const") {
+        constrain(&mut types, Some(SchemaTypes::of_value(value)));
+    }
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str)
+        && ref_depth < MAX_SCHEMA_REF_DEPTH
+        && let Some(target) = resolve_local_ref(reference, root)
+    {
+        constrain(
+            &mut types,
+            schema_types(target, root, ref_depth + 1, budget).map(|t| t.0),
+        );
+    }
+    for keyword in ["anyOf", "oneOf"] {
+        if let Some(branches) = schema.get(keyword).and_then(Value::as_array)
+            && !branches.is_empty()
         {
-            return true;
+            let union = branches.iter().try_fold(0, |acc, branch| {
+                schema_types(branch, root, ref_depth, budget).map(|t| acc | t.0)
+            });
+            constrain(&mut types, union);
         }
     }
+    if let Some(branches) = schema.get("allOf").and_then(Value::as_array) {
+        for branch in branches {
+            constrain(
+                &mut types,
+                schema_types(branch, root, ref_depth, budget).map(|t| t.0),
+            );
+        }
+    }
+    types.filter(|t| *t != 0).map(SchemaTypes)
+}
 
-    ["anyOf", "oneOf", "allOf"].iter().any(|key| {
-        schema
-            .get(key)
-            .and_then(Value::as_array)
-            .is_some_and(|options| {
-                options
-                    .iter()
-                    .any(|option| schema_has_type(option, expected))
-            })
-    })
+/// A `#` or `#/json/pointer` reference into the tool's parameter schema.
+fn resolve_local_ref<'a>(reference: &str, root: &'a Value) -> Option<&'a Value> {
+    match reference.strip_prefix('#')? {
+        "" => Some(root),
+        pointer => root.pointer(pointer),
+    }
+}
+
+/// An integer in RFC 8259 grammar: no sign but `-`, no leading zeros.
+fn is_json_integer_literal(text: &str) -> bool {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    is_integer_literal(text) && (digits == "0" || !digits.starts_with('0'))
+}
+
+/// The JSON value `text` spells (RFC 8259, surrounding whitespace allowed), when its type
+/// is one of `types` and is not string.
+fn admitted_json_value(text: &str, types: SchemaTypes) -> Option<ParsedValue> {
+    if is_json_integer_literal(text) {
+        // Through the integer coercer, which keeps integers beyond i64 exact.
+        return types
+            .admits(SchemaTypes::INTEGER)
+            .then(|| coerce_integer_literal(text))
+            .flatten();
+    }
+    let value: Value = serde_json::from_str(text).ok()?;
+    let value_type = match &value {
+        Value::Null => SchemaTypes::NULL,
+        Value::Bool(_) => SchemaTypes::BOOLEAN,
+        Value::Number(_) => SchemaTypes::NUMBER,
+        Value::Array(_) => SchemaTypes::ARRAY,
+        Value::Object(_) => SchemaTypes::OBJECT,
+        Value::String(_) => return None,
+    };
+    types.admits(value_type).then(|| value.into())
+}
+
+/// Coerce an argument's text to the types its parameter schema admits.
+///
+/// - One admitted type, however the schema spells it (`"type": "number"`, `["number"]`,
+///   an `anyOf` of one type, an `enum` of one type): that type's coercion.
+/// - Several admitted types: the JSON value the text spells, when its type is admitted
+///   and is not string. Otherwise a parameter that admits string gets the text verbatim,
+///   as a `string` parameter does (GLM writes string arguments unquoted and every other
+///   value as JSON, so quoted text stays quoted), and one that does not gets the untyped
+///   handling. So for `["string", "integer"]`, `42` is 42 and `007`, `1.0` and `+5` stay
+///   strings; for `["string", "null"]`, `null` is null. SGLang's GLM-4.7 detector
+///   resolves unions the same way; vLLM also prefers the typed value but reads `007`
+///   as 7.
+/// - No usable type information (an undeclared tool or parameter, `{}`, an unresolvable
+///   reference): the untyped handling, which parses only text that is already JSON.
+fn coerce_param_value(raw: &str, types: Option<SchemaTypes>) -> ParsedValue {
+    let Some(types) = types else {
+        return coerce_value(raw, None);
+    };
+    if let Some(name) = types.single() {
+        return coerce_value(raw, Some(name));
+    }
+    if let Some(value) = admitted_json_value(raw.trim(), types) {
+        return value;
+    }
+    coerce_value(raw, types.admits(SchemaTypes::STRING).then_some("string"))
 }
 
 /// Whether an undeclared function name is a plausible identifier: an ASCII letter or `_`,
@@ -698,8 +872,8 @@ fn parse_tool_call_block(
             // argument text, so `&amp;` in a value is source text (JSX, HTML), not an
             // escape: decoding it makes exact-match edit tools miss and rewrites the
             // code a write tool receives.
-            let schema_type = get_param_schema_type(tools, &function_name, key);
-            let json_value = coerce_value(raw_value, schema_type);
+            let types = param_types(tools, &function_name, key);
+            let json_value = coerce_param_value(raw_value, types);
 
             match argument_indices.get(key).copied() {
                 Some(index) => arguments[index].1 = json_value,
@@ -1374,24 +1548,12 @@ mod tests {
             serde_json::json!({"type": ["string"]}),
             serde_json::json!({"type": ["string", "null"]}),
             serde_json::json!({"type": ["null", "string"]}),
-            serde_json::json!({"type": ["object", "array", "string"]}),
             serde_json::json!({"anyOf": [{"type": "string"}, {"type": "null"}]}),
             serde_json::json!({"oneOf": [{"type": "null"}, {"type": "string"}]}),
             serde_json::json!({"allOf": [{"type": "string"}]}),
             serde_json::json!({"allOf": [{"minLength": 1}, {"type": "string"}]}),
-            serde_json::json!({"allOf": [
-                {"anyOf": [
-                    {"type": "null"},
-                    {"oneOf": [{"type": "array"}, {"type": "string"}]}
-                ]},
-                {"minLength": 1}
-            ]}),
             serde_json::json!({"oneOf": [
                 {"type": "null"}, {"allOf": [{"type": "string"}, {"minLength": 1}]}
-            ]}),
-            serde_json::json!({"anyOf": [
-                {"type": "object"},
-                {"oneOf": [{"type": "array"}, {"type": ["null", "string"]}]}
             ]}),
         ] {
             let config = get_test_config();
@@ -1442,6 +1604,312 @@ mod tests {
                 serde_json::json!({"key": "value"})
             );
             assert_eq!(args["untyped"], serde_json::json!([1, 2, 3]));
+        }
+    }
+
+    fn single_param(schema: Value) -> Value {
+        serde_json::json!({"type": "object", "properties": {"v": schema}})
+    }
+
+    /// The `v` argument parsed from `text` for a tool `f` with these parameters.
+    fn parse_arg(parameters: &Value, text: &str) -> Value {
+        let tools = vec![ToolDefinition {
+            name: "f".to_string(),
+            parameters: Some(parameters.clone()),
+            strict: None,
+        }];
+        let message =
+            format!("<tool_call>f<arg_key>v</arg_key><arg_value>{text}</arg_value></tool_call>");
+        let (calls, _) =
+            try_tool_call_parse_glm47(&message, &get_test_config(), Some(&tools)).unwrap();
+        assert_eq!(calls.len(), 1, "{message}");
+        let mut args: HashMap<String, Value> =
+            serde_json::from_str(&calls[0].function.arguments).unwrap();
+        args.remove("v").unwrap()
+    }
+
+    #[test]
+    fn test_single_type_is_coerced_however_the_schema_spells_it() {
+        use serde_json::json;
+        for (schema, text, expected) in [
+            (
+                json!({"type": ["number"], "minimum": -10}),
+                "-10",
+                json!(-10),
+            ),
+            (json!({"type": ["integer"]}), "0", json!(0)),
+            (json!({"type": ["boolean"]}), "false", json!(false)),
+            (json!({"type": ["null"]}), "null", Value::Null),
+            (
+                json!({"anyOf": [{"type": "boolean"}, {"type": "boolean"}]}),
+                "true",
+                json!(true),
+            ),
+            (
+                json!({"anyOf": [{"type": "null"}, {"type": "null"}]}),
+                "null",
+                Value::Null,
+            ),
+            (
+                json!({"oneOf": [{"type": "integer", "minimum": 0}, {"type": "integer", "maximum": -5}]}),
+                "7",
+                json!(7),
+            ),
+            (json!({"enum": [1, 2, 3]}), "2", json!(2)),
+            (json!({"enum": [1.5, 2.5]}), "2.5", json!(2.5)),
+            (json!({"const": true}), "true", json!(true)),
+            (
+                json!({"type": "number", "enum": [1.23, 4.56]}),
+                "4.56",
+                json!(4.56),
+            ),
+            (
+                json!({"allOf": [{"type": ["integer", "string"]}, {"type": "integer"}]}),
+                "12",
+                json!(12),
+            ),
+            // One type keeps that type's lenient coercion.
+            (json!({"anyOf": [{"type": "boolean"}]}), "yes", json!(true)),
+            (json!({"type": ["integer"]}), "007", json!(7)),
+        ] {
+            assert_eq!(
+                parse_arg(&single_param(schema.clone()), text),
+                expected,
+                "{schema} {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_local_refs_give_the_parameter_type() {
+        use serde_json::json;
+        let parameters = json!({
+            "type": "object",
+            "properties": {"v": {"$ref": "#/$defs/Count"}},
+            "$defs": {"Count": {"type": "integer"}}
+        });
+        assert_eq!(parse_arg(&parameters, "5"), json!(5));
+
+        let parameters = json!({
+            "type": "object",
+            "properties": {"v": {"$ref": "#/$defs/Node"}},
+            "$defs": {"Node": {
+                "type": "object",
+                "properties": {"next": {"$ref": "#/$defs/Node"}}
+            }}
+        });
+        assert_eq!(
+            parse_arg(&parameters, "{\"next\": {}}"),
+            json!({"next": {}})
+        );
+
+        // A string definition keeps JSON-looking text as written.
+        let parameters = json!({
+            "type": "object",
+            "properties": {"v": {"$ref": "#/$defs/Name"}},
+            "$defs": {"Name": {"type": "string"}}
+        });
+        assert_eq!(parse_arg(&parameters, "{\"a\": 1}"), json!("{\"a\": 1}"));
+
+        // `#` is the parameters schema itself.
+        let parameters = json!({"type": "object", "properties": {"v": {"$ref": "#"}}});
+        assert_eq!(parse_arg(&parameters, "{\"v\": 1}"), json!({"v": 1}));
+    }
+
+    #[test]
+    fn test_union_takes_the_json_value_of_an_admitted_type() {
+        use serde_json::json;
+        for (schema, text, expected) in [
+            (json!({"type": ["string", "null"]}), "null", Value::Null),
+            (json!({"type": ["null", "string"]}), " null ", Value::Null),
+            (
+                json!({"type": ["string", "null"], "enum": ["value", null]}),
+                "null",
+                Value::Null,
+            ),
+            (
+                json!({"anyOf": [{"type": "string"}, {"type": "null"}]}),
+                "null",
+                Value::Null,
+            ),
+            (json!({"type": ["string", "integer"]}), "42", json!(42)),
+            (json!({"type": ["string", "integer"]}), "-7", json!(-7)),
+            (json!({"type": ["string", "number"]}), "1.5", json!(1.5)),
+            (json!({"type": ["string", "number"]}), "1e3", json!(1000.0)),
+            (json!({"type": ["string", "boolean"]}), "true", json!(true)),
+            (
+                json!({"type": ["string", "array"]}),
+                "[\"a\", \"b\"]",
+                json!(["a", "b"]),
+            ),
+            (
+                json!({"anyOf": [{"type": "string"}, {"type": "object"}]}),
+                "{\"k\": 1}",
+                json!({"k": 1}),
+            ),
+            (json!({"type": ["integer", "null"]}), "null", Value::Null),
+            (json!({"type": ["integer", "null"]}), "-3", json!(-3)),
+            (json!({"type": ["boolean", "null"]}), "false", json!(false)),
+            (
+                json!({"anyOf": [{"type": "array"}, {"type": "null"}]}),
+                "[1, 2]",
+                json!([1, 2]),
+            ),
+            // An integer in JSON is an integer, not the boolean `1`.
+            (json!({"type": ["integer", "boolean"]}), "1", json!(1)),
+            (json!({"enum": ["a", 1, null]}), "1", json!(1)),
+        ] {
+            assert_eq!(
+                parse_arg(&single_param(schema.clone()), text),
+                expected,
+                "{schema} {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_union_keeps_integers_beyond_i64_exact() {
+        let tools = vec![ToolDefinition {
+            name: "f".to_string(),
+            parameters: Some(single_param(
+                serde_json::json!({"type": ["string", "integer"]}),
+            )),
+            strict: None,
+        }];
+        let message = "<tool_call>f<arg_key>v</arg_key><arg_value>123456789012345678901234567890</arg_value></tool_call>";
+        let (calls, _) =
+            try_tool_call_parse_glm47(message, &get_test_config(), Some(&tools)).unwrap();
+        assert_eq!(
+            calls[0].function.arguments,
+            r#"{"v":123456789012345678901234567890}"#
+        );
+    }
+
+    #[test]
+    fn test_union_with_string_keeps_other_text_verbatim() {
+        use serde_json::json;
+        for (schema, text) in [
+            // Not JSON: leading zeros, a plus sign, Python spellings, bare fractions.
+            (json!({"type": ["string", "integer"]}), "007"),
+            (json!({"type": ["string", "integer"]}), "+5"),
+            (json!({"type": ["string", "boolean"]}), "True"),
+            (json!({"type": ["string", "boolean"]}), "yes"),
+            (json!({"type": ["string", "null"]}), "None"),
+            (json!({"type": ["string", "null"]}), ""),
+            (json!({"type": ["string", "number"]}), ".5"),
+            (json!({"type": ["string", "number"]}), "NaN"),
+            (json!({"type": ["string", "integer"]}), "1 2"),
+            // JSON, but of a type the schema does not admit.
+            (json!({"type": ["string", "integer"]}), "1.0"),
+            (json!({"type": ["string", "integer"]}), "[1, 2]"),
+            (json!({"type": ["string", "null"]}), "{\"k\": 1}"),
+            // Quoted text is a string the model wrote with its quotes.
+            (json!({"type": ["string", "integer"]}), "\"42\""),
+            (json!({"type": ["string", "integer"]}), "  two words  "),
+        ] {
+            assert_eq!(
+                parse_arg(&single_param(schema.clone()), text),
+                json!(text),
+                "{schema} {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_union_without_string_falls_back_to_untyped_handling() {
+        use serde_json::json;
+        let schema = single_param(json!({"type": ["integer", "null"]}));
+        assert_eq!(parse_arg(&schema, "abc"), json!("abc"));
+        assert_eq!(parse_arg(&schema, "1.5"), json!("1.5"));
+        assert_eq!(parse_arg(&schema, "[1]"), json!([1]));
+    }
+
+    #[test]
+    fn test_untyped_or_unresolvable_schema_keeps_untyped_handling() {
+        use serde_json::json;
+        for schema in [
+            json!({}),
+            json!({"description": "anything"}),
+            json!({"type": "any"}),
+            json!({"$ref": "#/$defs/missing"}),
+            json!({"$ref": "https://example.com/schema.json"}),
+            json!({"anyOf": [{"type": "integer"}, {}]}),
+            json!({"allOf": [{"type": "string"}, {"type": "integer"}]}),
+        ] {
+            let parameters = single_param(schema.clone());
+            assert_eq!(parse_arg(&parameters, "42"), json!("42"), "{schema}");
+            assert_eq!(parse_arg(&parameters, "[1, 2]"), json!([1, 2]), "{schema}");
+        }
+    }
+
+    #[test]
+    fn test_reference_cycles_are_bounded() {
+        use serde_json::json;
+        for defs in [
+            json!({"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A"}}),
+            json!({"A": {"anyOf": [{"$ref": "#/$defs/A"}, {"$ref": "#/$defs/A"}]}}),
+            json!({"A": {"allOf": [{"$ref": "#/$defs/A"}, {"$ref": "#/$defs/A"}]}}),
+        ] {
+            let parameters = json!({
+                "type": "object",
+                "properties": {"v": {"$ref": "#/$defs/A"}},
+                "$defs": defs
+            });
+            assert_eq!(parse_arg(&parameters, "42"), json!("42"), "{parameters}");
+        }
+    }
+
+    #[test]
+    fn test_string_union_takes_json_of_an_admitted_container_type() {
+        use serde_json::json;
+        for (schema, object_admitted, array_admitted) in [
+            (json!({"type": ["object", "array", "string"]}), true, true),
+            (
+                json!({"allOf": [
+                    {"anyOf": [
+                        {"type": "null"},
+                        {"oneOf": [{"type": "array"}, {"type": "string"}]}
+                    ]},
+                    {"minLength": 1}
+                ]}),
+                false,
+                true,
+            ),
+            (
+                json!({"anyOf": [
+                    {"type": "object"},
+                    {"oneOf": [{"type": "array"}, {"type": ["null", "string"]}]}
+                ]}),
+                true,
+                true,
+            ),
+        ] {
+            let parameters = single_param(schema.clone());
+            let object_text = "{\"key\": \"value\"}";
+            let array_text = "[1, 2, 3]";
+            assert_eq!(
+                parse_arg(&parameters, object_text),
+                if object_admitted {
+                    json!({"key": "value"})
+                } else {
+                    json!(object_text)
+                },
+                "{schema}"
+            );
+            assert_eq!(
+                parse_arg(&parameters, array_text),
+                if array_admitted {
+                    json!([1, 2, 3])
+                } else {
+                    json!(array_text)
+                },
+                "{schema}"
+            );
+            assert_eq!(
+                parse_arg(&parameters, "\"quoted\""),
+                json!("\"quoted\""),
+                "{schema}"
+            );
         }
     }
 
