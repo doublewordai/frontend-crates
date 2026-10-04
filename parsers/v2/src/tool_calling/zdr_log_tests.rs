@@ -232,6 +232,17 @@ fn harmony_calls(name: &str) -> Vec<String> {
     ]
 }
 
+fn hunyuan_call(name: &str) -> String {
+    let mut body =
+        format!("<tool_calls:opensource><tool_call:opensource>{name}<tool_sep:opensource>");
+    for (key, value) in ARGS {
+        body.push_str(&format!(
+            "<arg_key:opensource>{key}</arg_key:opensource><arg_value:opensource>{value}</arg_value:opensource>"
+        ));
+    }
+    body + "</tool_call:opensource></tool_calls:opensource>"
+}
+
 fn muse_glimmer_call(name: &str) -> String {
     let mut body = format!(
         "<|start|>assistant to=self<|message|>{THINKING}<|eom|><|start|>assistant to={name}<|message|><atem:function_calls>\n<atem:invoke name=\"{name}\">\n"
@@ -284,6 +295,11 @@ fn unified_family_calls(family: &str, name: &str) -> Vec<String> {
             "<|open|>think<|sep|>{THINKING}<|close|>think<|sep|>{}",
             kimi_k3_call(name)
         )],
+        "hunyuan" => vec![format!(
+            "<think:opensource>{THINKING}</think:opensource>{}",
+            hunyuan_call(name)
+        )],
+        "mimo" => vec![think(qwen_call(name))],
         other => panic!("no ZDR log template for unified family {other}; add one"),
     }
 }
@@ -300,6 +316,7 @@ const OPENERS: &[&str] = &[
     "<｜DSML｜ calls>",
     "<atem:function_calls>",
     "<|channel|>commentary",
+    "<tool_calls:opensource>",
 ];
 
 /// Markers a family's calls close with, for the "closer lost" and
@@ -315,6 +332,7 @@ const CLOSERS: &[&str] = &[
     "</｜DSML｜ calls>",
     "</atem:function_calls>",
     "<|call|>",
+    "</tool_calls:opensource>",
 ];
 
 fn strip(text: &str, markers: &[&str]) -> String {
@@ -657,6 +675,8 @@ const REACHED: &[&str] = &[
     "guided output contained no JSON payload",
     "guided output did not parse as a tool call",
     "named-choice payload carries `name`",
+    "Hunyuan tool call names no offered tool",
+    "MiMo tool call names an unknown tool",
 ];
 
 #[test]

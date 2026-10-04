@@ -355,7 +355,11 @@ impl InvokeEmitter for HunyuanEmitter {
         };
         let offered = self.tools.is_empty() || self.tools.iter().any(|tool| tool.name == name);
         if name.is_empty() || !offered {
-            tracing::warn!(name, "Hunyuan tool call names no offered tool");
+            tracing::warn!(
+                name_len = name.len(),
+                offered_tools = self.tools.len(),
+                "Hunyuan tool call names no offered tool"
+            );
             return Ok(None);
         }
         let mut arguments = serde_json::Map::new();

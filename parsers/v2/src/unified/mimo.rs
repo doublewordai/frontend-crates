@@ -318,7 +318,11 @@ impl InvokeEmitter for MimoEmitter {
             return Ok(None);
         };
         if !self.tools.is_empty() && !self.tools.iter().any(|tool| tool.name == name) {
-            tracing::warn!(name, "MiMo tool call names an unknown tool");
+            tracing::warn!(
+                name_len = name.len(),
+                offered_tools = self.tools.len(),
+                "MiMo tool call names an unknown tool"
+            );
             return Ok(None);
         }
         Ok(Some(ToolCallDelta {
