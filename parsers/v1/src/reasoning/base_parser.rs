@@ -104,6 +104,16 @@ pub struct BasicReasoningParser {
     /// reasoning block (e.g. Kimi-K2/K2.5 models sometimes emit
     /// `<|tool_calls_section_begin|>` without first closing `</think>`).
     tool_start_tokens: Vec<String>,
+    /// Whether a tool marker inside reasoning ends the reasoning block only if no
+    /// reasoning close follows it. Models that quote their own call syntax while
+    /// thinking (GLM writes `<tool_call>` tokens when it reasons about earlier
+    /// calls) and then close the block with the real call after it must keep the
+    /// quote as reasoning; a call written without any close is the real call.
+    tentative_tool_exit: bool,
+    /// Streaming state for `tentative_tool_exit`: `_buffer` holds the text from
+    /// a tool marker seen inside reasoning until a reasoning close (the text was
+    /// reasoning) or the end of the stream (the text is the answer).
+    holding_tool_start: bool,
 }
 
 impl BasicReasoningParser {
@@ -124,7 +134,17 @@ impl BasicReasoningParser {
             buffer_single_char_marker_prefix: false,
             recover_tool_start_without_opener: false,
             tool_start_tokens: Vec::new(),
+            tentative_tool_exit: false,
+            holding_tool_start: false,
         }
+    }
+
+    /// A tool marker inside reasoning ends the block only when no reasoning close
+    /// follows it; see [`Self::tentative_tool_exit`]. While streaming, text from the
+    /// marker on is held until a close arrives or the stream ends.
+    pub fn with_tentative_tool_exit(mut self) -> Self {
+        self.tentative_tool_exit = true;
+        self
     }
 
     /// Enables force-exit from reasoning when `token` appears inside an open reasoning
@@ -251,7 +271,12 @@ impl ReasoningParser for BasicReasoningParser {
                 // Look for the earliest reasoning exit point: either </think> or the
                 // optional tool_start_token (force-exit case).
                 let end_offset = text[cursor..].find(&self.think_end_token);
-                let tool_offset = earliest_marker_offset(&text[cursor..], &self.tool_start_tokens);
+                let tool_offset = if self.tentative_tool_exit && end_offset.is_some() {
+                    // A close follows: tool markup before it was part of the reasoning.
+                    None
+                } else {
+                    earliest_marker_offset(&text[cursor..], &self.tool_start_tokens)
+                };
 
                 match (end_offset, tool_offset) {
                     (Some(e), Some(t)) if t < e => {
@@ -339,6 +364,34 @@ impl ReasoningParser for BasicReasoningParser {
         text: &str,
         _token_ids: &[u32],
     ) -> ParserResult {
+        if self.holding_tool_start {
+            // Only the bytes that could complete a close need rescanning.
+            let mut scan_from = self
+                ._buffer
+                .len()
+                .saturating_sub(self.think_end_token.len().saturating_sub(1));
+            while !self._buffer.is_char_boundary(scan_from) {
+                scan_from -= 1;
+            }
+            self._buffer.push_str(text);
+            let Some(relative) = self._buffer[scan_from..].find(self.think_end_token.as_str())
+            else {
+                return ParserResult::default();
+            };
+            // The held tool markup was part of the reasoning.
+            let end_idx = scan_from + relative;
+            let held = std::mem::take(&mut self._buffer);
+            self.holding_tool_start = false;
+            self._in_reasoning = false;
+            self.stripped_think_start = false;
+            self.recover_tool_start_without_opener = false;
+            let mut result = self.parse_reasoning_streaming_incremental(
+                &held[end_idx + self.think_end_token.len()..],
+                &[],
+            );
+            result.reasoning_text.insert_str(0, &held[..end_idx]);
+            return result;
+        }
         self._buffer.push_str(text);
 
         let mut accumulated_normal = String::new();
@@ -394,6 +447,22 @@ impl ReasoningParser for BasicReasoningParser {
                     (None, Some(t)) if !tool_is_partial_end => Some(t),
                     _ => None,
                 };
+
+                if let Some(tool_at) = force_exit_idx
+                    && self.tentative_tool_exit
+                {
+                    accumulated_reasoning.push_str(&current_text[..tool_at]);
+                    self._buffer = current_text[tool_at..].to_string();
+                    self.holding_tool_start = true;
+                    if self._buffer.contains(self.think_end_token.as_str()) {
+                        // The close is already here; resolve the hold now.
+                        let held = std::mem::take(&mut self._buffer);
+                        let rest = self.parse_reasoning_streaming_incremental(&held, &[]);
+                        accumulated_reasoning.push_str(&rest.reasoning_text);
+                        accumulated_normal.push_str(&rest.normal_text);
+                    }
+                    break;
+                }
 
                 if let Some(tool_at) = force_exit_idx {
                     accumulated_reasoning.push_str(&current_text[..tool_at]);
@@ -563,6 +632,14 @@ impl ReasoningParser for BasicReasoningParser {
     }
 
     fn finish_reasoning_stream(&mut self) -> ParserResult {
+        if self.holding_tool_start {
+            // No reasoning close followed the tool marker: it was the answer.
+            self.holding_tool_start = false;
+            return ParserResult {
+                normal_text: std::mem::take(&mut self._buffer),
+                reasoning_text: String::new(),
+            };
+        }
         if self._buffer.is_empty() {
             return ParserResult::default();
         }
