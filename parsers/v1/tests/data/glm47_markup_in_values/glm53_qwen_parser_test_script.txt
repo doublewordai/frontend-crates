@@ -1,0 +1,50 @@
+<tool_call>bash<arg_key>command</arg_key><arg_value>cat <<'PYEOF' > /tmp/repro/repro.py
+import harness
+from sglang.srt.function_call.function_call_parser import FunctionCallParser
+
+TOOLS = harness.make_tools()
+
+CASES = {
+    "qwen25": "I'll do it.<tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\"}}\n</tool_call>\nDone.",
+    "hermes": "I'll do it.<tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\"}}\n</tool_call>\nDone.",
+    "mistral": "I'll do it.[TOOL_CALLS] [{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\"}}] Done.",
+    "pythonic": "I'll do it. [get_weather(city='Paris')] Done.",
+    "kimi_k2": "I'll do it.<|tool_calls_section_begin|>[<|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>{\"city\": \"Paris\"}<|tool_call_end|>]<|tool_calls_section_end|> Done.",
+    "deepseekv3": "I'll do it.",
+    "glm": "I'll do it. Done.",
+    "qwen3_coder": "I'll do it. Done.",
+}
+
+
+def run(parser_name, text, chunk):
+    parser = FunctionCallParser(TOOLS, parser_name)
+    events = []
+    for i in range(0, len(text), chunk):
+        piece = text[i:i+chunk]
+        normal, calls = parser.parse_stream_chunk(piece)
+        if normal:
+            events.append(("content", normal))
+        for c in calls:
+            events.append(("call", c.name, c.parameters))
+    return events
+
+
+def summarize(events):
+    return "".join("C" if e[0] == "content" else "T" for e in events)
+
+
+for name, text in CASES.items():
+    print("=" * 70)
+    print(name)
+    base = run(name, text, 1)
+    print("  char-by-char:", summarize(base))
+    print("      ", [(e[0], (e[1] if e[0]=='content' else e[1:])) for e in base])
+    for chunk in (2, 3, 5, 8, 12, 20, 40, 10**6):
+        ev = run(name, text, chunk)
+        s = summarize(ev)
+        flag = "" if s == summarize(base) else "   <-- ORDER MISMATCH"
+        print("  chunk=%s: %s%s" % (chunk, s, flag))
+        if flag:
+            print("       ", [(e[0], (e[1] if e[0]=='content' else e[1:])) for e in ev])
+PYEOF
+cd /tmp/repro && python3 repro.py 2>&1 | head -140</arg_value></tool_call>

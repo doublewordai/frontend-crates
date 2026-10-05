@@ -117,8 +117,18 @@ pub fn find_tool_call_end_position_glm47(chunk: &str, config: &Glm47ParserConfig
     cursor
 }
 
+/// Whether text that starts at a bare call's first marker can be a call body: the name
+/// before it is followed by `<arg_key>` or `</tool_call>`.
+fn starts_bare_call_body(from_marker: &str, config: &Glm47ParserConfig) -> bool {
+    from_marker.starts_with(config.arg_key_start.as_str())
+        || from_marker.starts_with(config.tool_call_end.as_str())
+}
+
 fn find_bare_glm47_tool_call_end_position(text: &str, config: &Glm47ParserConfig) -> Option<usize> {
     let marker_idx = first_orphan_glm47_marker_index(text, config)?;
+    if !starts_bare_call_body(&text[marker_idx..], config) {
+        return None;
+    }
     let before_marker = text[..marker_idx].trim_end();
     let function_name_start = before_marker
         .char_indices()
@@ -241,6 +251,36 @@ fn extract_tool_calls(
             // Text after any </tool_call> is not response content; matches the
             // convention ported into the generic XML parser by PR #9350 and
             // vLLM's glm47_moe_tool_parser.
+
+            // Read the call with the declared tools, so markup inside an argument
+            // value stays in the value. A call this reading cannot place falls
+            // through to the first-end-marker handling below.
+            let scanner = Glm47Scanner::new(text, config, tools, true);
+            if let Scan::Call(call) = scanner.scan_call(abs_start) {
+                if scanner.stands_as_call(&call) == Some(false) {
+                    if calls.is_empty() {
+                        normal_parts.push(text[abs_start..call.end].to_string());
+                    }
+                    cursor = call.end;
+                    continue;
+                }
+                match build_scanned_call(text, &call, tools) {
+                    Ok(parsed_call) => calls.push(parsed_call),
+                    Err(e) => {
+                        warn!(
+                            reason = e.kind(),
+                            why = "block read by the schema-aware scan failed to build \
+                                   as a GLM-4.7 tool call; dropping to avoid leaking wire \
+                                   tags through normal_text",
+                            dropped_block_len = call.end - abs_start,
+                            block_offset = abs_start,
+                            "GLM-4.7 parser dropping unparseable tool_call block"
+                        );
+                    }
+                }
+                cursor = call.end;
+                continue;
+            }
 
             // Find the corresponding end token
             if let Some(end_pos) = text[abs_start..].find(end_token.as_str()) {
@@ -414,6 +454,12 @@ fn recover_bare_glm47_calls(
     tools: Option<&[ToolDefinition]>,
 ) -> anyhow::Result<Option<(String, Vec<ToolCallResponse>)>> {
     if !text[marker_idx..].contains(config.tool_call_end.as_str()) {
+        return Ok(None);
+    }
+    // A call name is followed by `<arg_key>` or `</tool_call>`. Text that runs into
+    // `</arg_value>` or `</arg_key>` first is the tail of a value or key whose call
+    // opener was lost, not a call body.
+    if !starts_bare_call_body(&text[marker_idx..], config) {
         return Ok(None);
     }
 
@@ -831,6 +877,590 @@ fn is_plausible_tool_name(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
 }
 
+/// The six GLM-4.7 tool-call tags.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tag {
+    CallStart,
+    CallEnd,
+    KeyStart,
+    KeyEnd,
+    ValueStart,
+    ValueEnd,
+}
+
+impl Tag {
+    const ALL: [Tag; 6] = [
+        Tag::CallStart,
+        Tag::CallEnd,
+        Tag::KeyStart,
+        Tag::KeyEnd,
+        Tag::ValueStart,
+        Tag::ValueEnd,
+    ];
+
+    fn text(self, config: &Glm47ParserConfig) -> &str {
+        match self {
+            Tag::CallStart => &config.tool_call_start,
+            Tag::CallEnd => &config.tool_call_end,
+            Tag::KeyStart => &config.arg_key_start,
+            Tag::KeyEnd => &config.arg_key_end,
+            Tag::ValueStart => &config.arg_value_start,
+            Tag::ValueEnd => &config.arg_value_end,
+        }
+    }
+}
+
+/// How strongly a tag sequence after an `</arg_value>` reads as structure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Strength {
+    /// A declared, not yet given parameter, or the end of the call followed by
+    /// the end of the output or by a call to a declared tool.
+    Strong,
+    /// A parameter name the schema does not declare or that the call already
+    /// gave, or a following call to an undeclared tool.
+    Weak,
+}
+
+/// What follows a candidate `</arg_value>`.
+enum Continuation {
+    Structural(Strength),
+    /// Not a structural continuation: the tag is text inside the value.
+    Literal,
+    /// The text so far cannot tell (only while streaming).
+    Undecided,
+}
+
+/// The outcome of reading one call that starts with `<tool_call>`.
+enum Scan {
+    Call(ScannedCall),
+    /// More output is needed to decide (only while streaming).
+    Undecided,
+    /// Not a call this grammar reads; the caller falls back to the plain reading.
+    Unparsed,
+}
+
+struct ScannedCall {
+    name: String,
+    /// Whether the request declares the tool.
+    declared: bool,
+    args: Vec<(String, std::ops::Range<usize>)>,
+    /// Byte offset just past the call's `</tool_call>`.
+    end: usize,
+}
+
+/// Literal tag pairs inside an argument value. Markup a value holds is usually written
+/// whole (a heredoc that writes a GLM tool call, a test fixture), so an `</arg_value>`
+/// reached with every literal pair closed is preferred as the end of the value.
+#[derive(Default)]
+struct LiteralBalance {
+    calls: usize,
+    values: usize,
+    unmatched_close: bool,
+}
+
+impl LiteralBalance {
+    fn add(&mut self, tag: Tag) {
+        let (open, count) = match tag {
+            Tag::CallStart => (true, &mut self.calls),
+            Tag::CallEnd => (false, &mut self.calls),
+            Tag::ValueStart => (true, &mut self.values),
+            Tag::ValueEnd => (false, &mut self.values),
+            Tag::KeyStart | Tag::KeyEnd => return,
+        };
+        if open {
+            *count += 1;
+        } else if *count == 0 {
+            self.unmatched_close = true;
+        } else {
+            *count -= 1;
+        }
+    }
+
+    fn closed(&self) -> bool {
+        self.calls == 0 && self.values == 0 && !self.unmatched_close
+    }
+}
+
+/// Reads GLM-4.7 calls with the request's tool schemas.
+///
+/// GLM writes a string argument as raw text, and its tokenizer turns the text of each
+/// tag into the tag's own token, so a value can hold the model's own markup: a heredoc
+/// that writes a tool-call fixture, a parser test, a grep for `</tool_call>`. Matching the
+/// first `</arg_value>` or `</tool_call>` cuts such a value short and leaks the rest as
+/// content. Here a tag inside a value is structure only where the grammar and the
+/// declared tools allow it:
+///
+/// - `</arg_value>` ends a value only if, after optional whitespace, it is followed by
+///   `<arg_key>NAME</arg_key><arg_value>` or by `</tool_call>`, and `</tool_call>` in turn
+///   by optional text with no tag in it and then the end of the output or another
+///   `<tool_call>NAME`;
+/// - a following `<arg_key>` is strong when it names a declared parameter the call has not
+///   given yet (any identifier when the tool has no declared parameters), and weak when the
+///   name is undeclared or repeated; a following call is strong when its tool is declared,
+///   or when the request declares no tools;
+/// - among the candidates, the first strong one reached with every literal tag pair in the
+///   value closed wins; then the first weak one with the pairs closed; then the first strong
+///   one; then the first weak one. Every other tag is text inside the value.
+///
+/// So `<arg_value>cat <<'EOF'\n<tool_call>f<arg_key>k</arg_key><arg_value>v</arg_value></tool_call>\nEOF</arg_value></tool_call>`
+/// is one call whose value runs to the last `</arg_value>`, while two calls written back to
+/// back stay two calls.
+///
+/// While streaming (`at_eof == false`), a value end is decided only when no later text
+/// could change the reading: it is the first candidate of the strongest class, and the text
+/// after it already shows the next declared parameter or the next call to a declared tool.
+/// Otherwise the scan reports [`Scan::Undecided`] and the caller holds the text until more
+/// arrives or the stream ends.
+struct Glm47Scanner<'a> {
+    text: &'a str,
+    config: &'a Glm47ParserConfig,
+    tools: Option<&'a [ToolDefinition]>,
+    at_eof: bool,
+}
+
+impl<'a> Glm47Scanner<'a> {
+    fn new(
+        text: &'a str,
+        config: &'a Glm47ParserConfig,
+        tools: Option<&'a [ToolDefinition]>,
+        at_eof: bool,
+    ) -> Self {
+        Self {
+            text,
+            config,
+            tools,
+            at_eof,
+        }
+    }
+
+    fn skip_ws(&self, mut pos: usize) -> usize {
+        let rest = &self.text[pos..];
+        pos += rest.len() - rest.trim_start().len();
+        pos
+    }
+
+    /// The first tag at or after `from`, and where it starts.
+    fn next_tag(&self, from: usize) -> Option<(usize, Tag)> {
+        let mut pos = from;
+        while let Some(off) = self.text[pos..].find('<') {
+            let at = pos + off;
+            let rest = &self.text[at..];
+            if let Some(tag) = Tag::ALL
+                .into_iter()
+                .find(|tag| rest.starts_with(tag.text(self.config)))
+            {
+                return Some((at, tag));
+            }
+            pos = at + 1;
+        }
+        None
+    }
+
+    /// Whether `tag` starts at `pos`: `Some(true)`, `Some(false)`, or `None` when the text
+    /// ends inside a prefix of it while more may arrive.
+    fn tag_at(&self, pos: usize, tag: Tag) -> Option<bool> {
+        let rest = &self.text[pos..];
+        let tag = tag.text(self.config);
+        if rest.starts_with(tag) {
+            Some(true)
+        } else if !self.at_eof && tag.starts_with(rest) {
+            None
+        } else {
+            Some(false)
+        }
+    }
+
+    fn tool(&self, name: &str) -> Option<&'a ToolDefinition> {
+        self.tools?.iter().find(|t| t.name == name)
+    }
+
+    /// Whether the request declares any tool. Without declarations every plausible name
+    /// reads as a tool name: there is nothing to tell a fixture from a call by.
+    fn declares_tools(&self) -> bool {
+        self.tools.is_some_and(|tools| !tools.is_empty())
+    }
+
+    fn name_strength(&self, name: &str) -> Option<Strength> {
+        if self.tool(name).is_some() {
+            Some(Strength::Strong)
+        } else if is_plausible_tool_name(name) {
+            Some(if self.declares_tools() {
+                Strength::Weak
+            } else {
+                Strength::Strong
+            })
+        } else {
+            None
+        }
+    }
+
+    fn key_strength(&self, tool: &str, key: &str, given: &[&str]) -> Option<Strength> {
+        let declared = self
+            .tool(tool)
+            .and_then(|t| t.parameters.as_ref())
+            .and_then(|p| p.get("properties"))
+            .and_then(Value::as_object)
+            .filter(|properties| !properties.is_empty());
+        let repeated = given.contains(&key);
+        match declared {
+            Some(properties) if properties.contains_key(key) && !repeated => Some(Strength::Strong),
+            None if !repeated && is_plausible_tool_name(key) => Some(Strength::Strong),
+            _ if is_plausible_tool_name(key) => Some(Strength::Weak),
+            _ => None,
+        }
+    }
+
+    /// The name between `<tool_call>` and the tag after it, which must be `<arg_key>` or
+    /// `</tool_call>`. `Err(true)` when undecided, `Err(false)` when there is none.
+    fn call_name(&self, after_start: usize) -> Result<(&'a str, usize), bool> {
+        match self.next_tag(after_start) {
+            Some((at, Tag::KeyStart | Tag::CallEnd)) => {
+                let name = self.text[after_start..at].trim();
+                if name.is_empty() {
+                    Err(false)
+                } else {
+                    Ok((name, at))
+                }
+            }
+            Some(_) => Err(false),
+            None => Err(!self.at_eof),
+        }
+    }
+
+    /// Read the call whose `<tool_call>` starts at `start`.
+    fn scan_call(&self, start: usize) -> Scan {
+        let after_start = start + self.config.tool_call_start.len();
+        let (name, mut pos) = match self.call_name(after_start) {
+            Ok(found) => found,
+            Err(true) => return Scan::Undecided,
+            Err(false) => return Scan::Unparsed,
+        };
+        if self.name_strength(name).is_none() {
+            return Scan::Unparsed;
+        }
+        let mut args: Vec<(String, std::ops::Range<usize>)> = Vec::new();
+        loop {
+            pos = self.skip_ws(pos);
+            if pos == self.text.len() {
+                return if self.at_eof {
+                    Scan::Unparsed
+                } else {
+                    Scan::Undecided
+                };
+            }
+            match (
+                self.tag_at(pos, Tag::CallEnd),
+                self.tag_at(pos, Tag::KeyStart),
+            ) {
+                (Some(true), _) => {
+                    return Scan::Call(ScannedCall {
+                        name: name.to_string(),
+                        declared: self.tool(name).is_some(),
+                        args,
+                        end: pos + self.config.tool_call_end.len(),
+                    });
+                }
+                (_, Some(true)) => {}
+                (None, _) | (_, None) => return Scan::Undecided,
+                _ => return Scan::Unparsed,
+            }
+            let (key, value_start) = match self.key_then_value(pos) {
+                Ok(found) => found,
+                Err(true) => return Scan::Undecided,
+                Err(false) => return Scan::Unparsed,
+            };
+            let given: Vec<&str> = args.iter().map(|(k, _)| k.as_str()).collect();
+            let given = [given.as_slice(), &[key]].concat();
+            let value_end = match self.value_end(name, &given, value_start) {
+                Ok(end) => end,
+                Err(true) => return Scan::Undecided,
+                Err(false) => return Scan::Unparsed,
+            };
+            args.push((key.to_string(), value_start..value_end));
+            pos = value_end + self.config.arg_value_end.len();
+        }
+    }
+
+    /// `<arg_key>KEY</arg_key>` at `pos`, optional whitespace, then `<arg_value>`: the key
+    /// and where the value starts. `Err(true)` when undecided, `Err(false)` when malformed.
+    fn key_then_value(&self, pos: usize) -> Result<(&'a str, usize), bool> {
+        let key_start = pos + self.config.arg_key_start.len();
+        let key_end = match self.next_tag(key_start) {
+            Some((at, Tag::KeyEnd)) => at,
+            Some(_) => return Err(false),
+            None => return Err(!self.at_eof),
+        };
+        let key = self.text[key_start..key_end].trim();
+        if key.is_empty() {
+            return Err(false);
+        }
+        let value_tag = self.skip_ws(key_end + self.config.arg_key_end.len());
+        if value_tag == self.text.len() {
+            return Err(!self.at_eof);
+        }
+        match self.tag_at(value_tag, Tag::ValueStart) {
+            Some(true) => Ok((key, value_tag + self.config.arg_value_start.len())),
+            Some(false) => Err(false),
+            None => Err(true),
+        }
+    }
+
+    /// Where the value starting at `value_start` ends (the offset of its `</arg_value>`).
+    /// `given` holds the keys of the call so far, this one included.
+    fn value_end(&self, tool: &str, given: &[&str], value_start: usize) -> Result<usize, bool> {
+        // First candidate of each class: strong and closed, weak and closed, strong, weak.
+        let mut first: [Option<usize>; 4] = [None; 4];
+        let mut balance = LiteralBalance::default();
+        let mut pos = value_start;
+        while let Some((at, tag)) = self.next_tag(pos) {
+            if tag == Tag::ValueEnd {
+                match self.continuation(tool, given, at) {
+                    Continuation::Structural(strength) => {
+                        let class = match (strength, balance.closed()) {
+                            (Strength::Strong, true) => 0,
+                            (Strength::Weak, true) => 1,
+                            (Strength::Strong, false) => 2,
+                            (Strength::Weak, false) => 3,
+                        };
+                        if class == 0 {
+                            return Ok(at);
+                        }
+                        first[class].get_or_insert(at);
+                    }
+                    Continuation::Literal => {}
+                    Continuation::Undecided => return Err(true),
+                }
+            }
+            balance.add(tag);
+            pos = at + tag.text(self.config).len();
+        }
+        if !self.at_eof {
+            return Err(true);
+        }
+        first.into_iter().flatten().next().ok_or(false)
+    }
+
+    /// What follows the `</arg_value>` at `at`.
+    fn continuation(&self, tool: &str, given: &[&str], at: usize) -> Continuation {
+        let pos = self.skip_ws(at + self.config.arg_value_end.len());
+        if pos == self.text.len() {
+            // Closed value, no `</tool_call>`: a truncated call, not a reading to prefer.
+            return if self.at_eof {
+                Continuation::Literal
+            } else {
+                Continuation::Undecided
+            };
+        }
+        match (
+            self.tag_at(pos, Tag::KeyStart),
+            self.tag_at(pos, Tag::CallEnd),
+        ) {
+            (Some(true), _) => match self.key_then_value(pos) {
+                Ok((key, _)) => match self.key_strength(tool, key, given) {
+                    Some(strength) => Continuation::Structural(strength),
+                    None => Continuation::Literal,
+                },
+                Err(true) => Continuation::Undecided,
+                Err(false) => Continuation::Literal,
+            },
+            (_, Some(true)) => self.after_call(pos + self.config.tool_call_end.len()),
+            (None, _) | (_, None) => Continuation::Undecided,
+            _ => Continuation::Literal,
+        }
+    }
+
+    /// What follows a candidate `</tool_call>`.
+    fn after_call(&self, pos: usize) -> Continuation {
+        let pos = self.skip_ws(pos);
+        if pos == self.text.len() {
+            return if self.at_eof {
+                Continuation::Structural(Strength::Strong)
+            } else {
+                Continuation::Undecided
+            };
+        }
+        if self.tag_at(pos, Tag::CallStart).is_none() {
+            return Continuation::Undecided;
+        }
+        // Optional text between calls, then either nothing more or the next call. Any
+        // other tag after the text means the value goes on.
+        match self.next_tag(pos) {
+            Some((at, Tag::CallStart)) => {
+                match self.call_name(at + self.config.tool_call_start.len()) {
+                    Ok((name, _)) => match self.name_strength(name) {
+                        Some(strength) => Continuation::Structural(strength),
+                        None => Continuation::Literal,
+                    },
+                    // A later call cut off before its name ends: the earlier call is complete.
+                    Err(_) if self.at_eof => Continuation::Structural(Strength::Strong),
+                    Err(true) => Continuation::Undecided,
+                    Err(false) => Continuation::Literal,
+                }
+            }
+            Some(_) => Continuation::Literal,
+            None if self.at_eof => Continuation::Structural(Strength::Strong),
+            None => Continuation::Undecided,
+        }
+    }
+}
+
+impl Glm47Scanner<'_> {
+    /// Whether the call ending at `end` is followed only by whitespace and then the end of
+    /// the output or another `<tool_call>`. `None` while streaming and undecided.
+    fn followed_by_call_or_end(&self, end: usize) -> Option<bool> {
+        let pos = self.skip_ws(end);
+        if pos == self.text.len() {
+            return self.at_eof.then_some(true);
+        }
+        self.tag_at(pos, Tag::CallStart)
+    }
+
+    /// When the request declares tools, a call to an undeclared tool is the model's call
+    /// only where calls stand: at the end of the output or right before another call.
+    /// Followed by more text, it is markup the model wrote as text (a code block showing a
+    /// tool-call fixture), not a call.
+    fn stands_as_call(&self, call: &ScannedCall) -> Option<bool> {
+        if call.declared || !self.declares_tools() {
+            Some(true)
+        } else {
+            self.followed_by_call_or_end(call.end)
+        }
+    }
+}
+
+/// Where the GLM-4.7 calls at the start of a streamed buffer end, read with the request's
+/// tool schemas (see [`Glm47Scanner`]).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Glm47StreamBoundary {
+    /// The calls before this byte offset are decided; the rest of the buffer is not part
+    /// of them.
+    Complete(usize),
+    /// Keep buffering: a tag seen so far may still turn out to be text inside a value.
+    Undecided,
+    /// The buffer does not start with a call this reading applies to (bare call bodies,
+    /// stray markup); use the plain end-marker handling.
+    NotACall,
+}
+
+/// Find the decided end of the calls a streamed GLM-4.7 buffer starts with. A call is
+/// decided once the text after it shows the next call; the last call of a response is
+/// decided at the end of the stream, by the batch parser.
+pub fn find_complete_tool_call_end_position_glm47(
+    buffer: &str,
+    config: &Glm47ParserConfig,
+    tools: Option<&[ToolDefinition]>,
+) -> Glm47StreamBoundary {
+    call_group_end(buffer, config, tools, false)
+}
+
+/// The end of the calls a complete GLM-4.7 output starts with (after any whitespace
+/// between them), or `None` when it does not start with a call this reading applies to.
+pub fn find_tool_call_group_end_glm47_at_eof(
+    buffer: &str,
+    config: &Glm47ParserConfig,
+    tools: Option<&[ToolDefinition]>,
+) -> Option<usize> {
+    match call_group_end(buffer, config, tools, true) {
+        Glm47StreamBoundary::Complete(end) => Some(end),
+        _ => None,
+    }
+}
+
+fn call_group_end(
+    buffer: &str,
+    config: &Glm47ParserConfig,
+    tools: Option<&[ToolDefinition]>,
+    at_eof: bool,
+) -> Glm47StreamBoundary {
+    let scanner = Glm47Scanner::new(buffer, config, tools, at_eof);
+    let mut pos = scanner.skip_ws(0);
+    if !buffer[pos..].starts_with(config.tool_call_start.as_str()) {
+        return Glm47StreamBoundary::NotACall;
+    }
+    let mut decided = None;
+    loop {
+        match scanner.scan_call(pos) {
+            Scan::Call(call) if scanner.stands_as_call(&call) != Some(true) => break,
+            Scan::Call(call) => {
+                pos = scanner.skip_ws(call.end);
+                if !buffer[pos..].starts_with(config.tool_call_start.as_str()) {
+                    decided = Some(call.end);
+                    break;
+                }
+                // Whitespace between two calls is framing, not content.
+                decided = Some(pos);
+            }
+            Scan::Undecided => break,
+            Scan::Unparsed if decided.is_none() => return Glm47StreamBoundary::NotACall,
+            Scan::Unparsed => break,
+        }
+    }
+    decided.map_or(
+        Glm47StreamBoundary::Undecided,
+        Glm47StreamBoundary::Complete,
+    )
+}
+
+/// Whether `text` holds a GLM-4.7 tag, for callers deciding if a streamed buffer is worth
+/// scanning again.
+pub fn contains_glm47_tag(text: &str, config: &Glm47ParserConfig) -> bool {
+    Tag::ALL
+        .into_iter()
+        .any(|tag| text.contains(tag.text(config)))
+}
+
+/// Build a call from its name and its `(key, raw value)` pairs: keys in the order the model
+/// wrote them (a repeated key keeps its first position and its last value), values typed by
+/// the parameter schema.
+fn build_tool_call<'k>(
+    function_name: String,
+    pairs: impl IntoIterator<Item = (&'k str, &'k str)>,
+    tools: Option<&[ToolDefinition]>,
+) -> Result<ToolCallResponse, BlockError> {
+    let mut arguments: Vec<(String, ParsedValue)> = Vec::new();
+    let mut argument_indices: HashMap<&str, usize> = HashMap::new();
+    for (key, raw_value) in pairs {
+        if key.is_empty() {
+            continue;
+        }
+        // The value is delivered as the model wrote it. GLM does not XML-escape
+        // argument text, so `&amp;` in a value is source text (JSX, HTML), not an
+        // escape: decoding it makes exact-match edit tools miss and rewrites the
+        // code a write tool receives.
+        let types = param_types(tools, &function_name, key);
+        let json_value = coerce_param_value(raw_value, types);
+        match argument_indices.get(key).copied() {
+            Some(index) => arguments[index].1 = json_value,
+            None => {
+                argument_indices.insert(key, arguments.len());
+                arguments.push((key.to_string(), json_value));
+            }
+        }
+    }
+
+    // A call to a tool the request does not declare is still the model's tool call:
+    // return it with the name and arguments as written. Dropping it here left the
+    // response with neither content nor tool_calls. Arguments of an undeclared tool have
+    // no schema, so `coerce_value` keeps strings as written and parses only values that
+    // are already JSON. An undeclared name must look like an identifier, though: markup
+    // that lost its `<tool_call>` opener (a provider's broken output) otherwise yields a
+    // "name" such as `1024</arg_value>`, and that block stays unparseable.
+    let declared = tools.is_some_and(|tools| tools.iter().any(|t| t.name == function_name));
+    if !declared && !is_plausible_tool_name(&function_name) {
+        return Err(BlockError::UndeclaredNonIdentifier);
+    }
+
+    Ok(ToolCallResponse {
+        id: Uuid::new_v4().to_string(),
+        tp: ToolCallType::Function,
+        function: CalledFunction {
+            name: function_name,
+            arguments: serde_json::to_string(&OrderedArguments(&arguments))
+                .map_err(BlockError::Arguments)?,
+        },
+    })
+}
+
 /// Parse a single GLM-4.7 tool call block
 /// Format: <tool_call>function_name<arg_key>key1</arg_key><arg_value>value1</arg_value>...</tool_call>
 fn parse_tool_call_block(
@@ -864,9 +1494,6 @@ fn parse_tool_call_block(
         return Err(BlockError::EmptyFunctionName);
     }
 
-    // Parse key-value pairs, keeping the order the model emitted them in.
-    let mut arguments: Vec<(String, ParsedValue)> = Vec::new();
-    let mut argument_indices: HashMap<&str, usize> = HashMap::new();
     let args_section = &content[function_name.len()..];
 
     // Build regex patterns
@@ -884,50 +1511,29 @@ fn parse_tool_call_block(
     );
 
     let regex = Regex::new(&pattern).map_err(BlockError::Pattern)?;
+    let pairs: Vec<(&str, &str)> = regex
+        .captures_iter(args_section)
+        .map(|cap| {
+            (
+                cap.get(1).map(|m| m.as_str().trim()).unwrap_or(""),
+                cap.get(2).map(|m| m.as_str()).unwrap_or(""),
+            )
+        })
+        .collect();
+    build_tool_call(function_name, pairs, tools)
+}
 
-    for cap in regex.captures_iter(args_section) {
-        let key = cap.get(1).map(|m| m.as_str().trim()).unwrap_or("");
-        let raw_value = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-
-        if !key.is_empty() {
-            // The value is delivered as the model wrote it. GLM does not XML-escape
-            // argument text, so `&amp;` in a value is source text (JSX, HTML), not an
-            // escape: decoding it makes exact-match edit tools miss and rewrites the
-            // code a write tool receives.
-            let types = param_types(tools, &function_name, key);
-            let json_value = coerce_param_value(raw_value, types);
-
-            match argument_indices.get(key).copied() {
-                Some(index) => arguments[index].1 = json_value,
-                None => {
-                    argument_indices.insert(key, arguments.len());
-                    arguments.push((key.to_string(), json_value));
-                }
-            }
-        }
-    }
-
-    // A call to a tool the request does not declare is still the model's tool call:
-    // return it with the name and arguments as written. Dropping it here left the
-    // response with neither content nor tool_calls. Arguments of an undeclared tool have
-    // no schema, so `coerce_value` keeps strings as written and parses only values that
-    // are already JSON. An undeclared name must look like an identifier, though: markup
-    // that lost its `<tool_call>` opener (a provider's broken output) otherwise yields a
-    // "name" such as `1024</arg_value>`, and that block stays unparseable.
-    let declared = tools.is_some_and(|tools| tools.iter().any(|t| t.name == function_name));
-    if !declared && !is_plausible_tool_name(&function_name) {
-        return Err(BlockError::UndeclaredNonIdentifier);
-    }
-
-    Ok(ToolCallResponse {
-        id: Uuid::new_v4().to_string(),
-        tp: ToolCallType::Function,
-        function: CalledFunction {
-            name: function_name,
-            arguments: serde_json::to_string(&OrderedArguments(&arguments))
-                .map_err(BlockError::Arguments)?,
-        },
-    })
+/// Build the call [`Glm47Scanner`] read out of `text`.
+fn build_scanned_call(
+    text: &str,
+    call: &ScannedCall,
+    tools: Option<&[ToolDefinition]>,
+) -> Result<ToolCallResponse, BlockError> {
+    let pairs = call
+        .args
+        .iter()
+        .map(|(key, value)| (key.as_str(), &text[value.clone()]));
+    build_tool_call(call.name.clone(), pairs, tools)
 }
 
 #[cfg(test)]
@@ -2070,5 +2676,341 @@ mod tests {
             serde_json::from_str(&calls[1].function.arguments).unwrap();
         assert_eq!(args0.get("location").unwrap().as_str().unwrap(), "NYC");
         assert_eq!(args1.get("location").unwrap().as_str().unwrap(), "LA");
+    }
+
+    // ---------------------------------------------------------------------------------
+    // GLM markup inside argument values. GLM writes string arguments raw, so a value can
+    // hold `<tool_call>`, `</arg_value>`, `</tool_call>` as text.
+    // ---------------------------------------------------------------------------------
+
+    fn bash_tools() -> Vec<ToolDefinition> {
+        vec![ToolDefinition {
+            name: "bash".to_string(),
+            parameters: Some(serde_json::json!({
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"]
+            })),
+            strict: None,
+        }]
+    }
+
+    fn edit_tools() -> Vec<ToolDefinition> {
+        vec![
+            ToolDefinition {
+                name: "edit".to_string(),
+                parameters: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "old_str": {"type": "string"},
+                        "new_str": {"type": "string"}
+                    }
+                })),
+                strict: None,
+            },
+            bash_tools().remove(0),
+        ]
+    }
+
+    fn bash_call(command: &str) -> String {
+        format!(
+            "<tool_call>bash<arg_key>command</arg_key><arg_value>{command}</arg_value></tool_call>"
+        )
+    }
+
+    /// (name, arguments) of each call, and the normal text.
+    fn parse_with(message: &str, tools: &[ToolDefinition]) -> (Vec<(String, Value)>, String) {
+        let (calls, text) =
+            try_tool_call_parse_glm47(message, &get_test_config(), Some(tools)).unwrap();
+        let calls = calls
+            .into_iter()
+            .map(|c| {
+                (
+                    c.function.name,
+                    serde_json::from_str(&c.function.arguments).unwrap(),
+                )
+            })
+            .collect();
+        (calls, text.unwrap_or_default())
+    }
+
+    const FIXTURE: &str =
+        "<tool_call>get_weather<arg_key>city</arg_key><arg_value>Paris</arg_value></tool_call>";
+
+    #[test]
+    fn test_markup_fixture_in_heredoc_stays_in_the_command() {
+        for command in [
+            format!("cat > /tmp/fixture.txt <<'EOF'\n{FIXTURE}\nEOF"),
+            format!("cat > /tmp/fixture.txt <<'EOF'\n{FIXTURE}\n{FIXTURE}\nEOF\ncat /tmp/fixture.txt"),
+            // GLM-4.5 layout, newlines between the elements.
+            "cat > f <<'EOF'\n<tool_call>get_weather\n<arg_key>city</arg_key>\n<arg_value>Paris</arg_value>\n</tool_call>\nEOF".to_string(),
+            // The fixture is a call to a declared tool.
+            format!("cat > f <<'EOF'\n{}\nEOF", bash_call("ls")),
+            // The command ends with the fixture.
+            format!("printf '%s' '{FIXTURE}'"),
+            FIXTURE.to_string(),
+        ] {
+            let (calls, text) = parse_with(&bash_call(&command), &bash_tools());
+            assert_eq!(calls, [("bash".to_string(), serde_json::json!({"command": command}))]);
+            assert_eq!(text, "");
+        }
+    }
+
+    #[test]
+    fn test_other_formats_markup_stays_in_the_command() {
+        // Qwen / Hermes markup shares the tag names: `<tool_call>` with no `</arg_value>`.
+        for command in [
+            "python3 -c 'print(\"<tool_call>\\n{\\\"name\\\": \\\"f\\\"}\\n</tool_call>\")'",
+            "grep -n '</tool_call>' parser.py",
+            "grep -n '<tool_call>' parser.py && sed -i 's#</arg_value>##' x.txt",
+            "echo '<arg_key>city</arg_key> value: <arg_value>Paris</arg_value>'",
+            "echo 'key: <tool_call>city</arg_key> value: <arg_key>Paris'",
+            "if [[ $s == *'</arg_value></tool_call>'* ]]; then echo closed; fi",
+        ] {
+            let (calls, text) = parse_with(&bash_call(command), &bash_tools());
+            assert_eq!(
+                calls,
+                [("bash".to_string(), serde_json::json!({"command": command}))],
+                "{command}"
+            );
+            assert_eq!(text, "");
+        }
+    }
+
+    #[test]
+    fn test_recorded_outputs_with_markup_in_the_command() {
+        // GLM-5.3 and GLM-5.3-Flash outputs for Terminal-Bench parser tasks. The token ids
+        // show the model wrote the markup inside the command as ordinary text and only the
+        // outer tags as tag tokens, so the command is the text between the first
+        // `<arg_value>` and the last `</arg_value>`. Before this reading every one parsed
+        // as `bash({})` with the rest of the command in content.
+        for (name, text) in [
+            (
+                "qwen_parser_test_script",
+                include_str!(
+                    "../../../tests/data/glm47_markup_in_values/glm53_qwen_parser_test_script.txt"
+                ),
+            ),
+            (
+                "qwen_parser_test_script_2",
+                include_str!(
+                    "../../../tests/data/glm47_markup_in_values/glm53_qwen_parser_test_script_2.txt"
+                ),
+            ),
+            (
+                "flash_parser_samples_script",
+                include_str!(
+                    "../../../tests/data/glm47_markup_in_values/glm53_flash_parser_samples_script.txt"
+                ),
+            ),
+            (
+                "flash_fixture_heredoc",
+                include_str!(
+                    "../../../tests/data/glm47_markup_in_values/glm53_flash_fixture_heredoc.txt"
+                ),
+            ),
+        ] {
+            let start = text.find("<arg_value>").unwrap() + "<arg_value>".len();
+            let end = text.rfind("</arg_value>").unwrap();
+            let prose = &text[..text.find("<tool_call>").unwrap()];
+            let (calls, normal) = parse_with(text, &bash_tools());
+            assert_eq!(
+                calls,
+                [(
+                    "bash".to_string(),
+                    serde_json::json!({"command": &text[start..end]})
+                )],
+                "{name}"
+            );
+            assert_eq!(normal, prose, "{name}");
+        }
+    }
+
+    #[test]
+    fn test_parallel_calls_with_markup_in_values() {
+        let first = format!("cat > a.txt <<'EOF'\n{FIXTURE}\nEOF");
+        let message = format!(
+            "{}\n{}",
+            bash_call(&first),
+            bash_call("grep -c '</tool_call>' a.txt")
+        );
+        let (calls, _) = parse_with(&message, &bash_tools());
+        assert_eq!(
+            calls,
+            [
+                ("bash".to_string(), serde_json::json!({"command": first})),
+                (
+                    "bash".to_string(),
+                    serde_json::json!({"command": "grep -c '</tool_call>' a.txt"})
+                ),
+            ]
+        );
+
+        // A value with an unclosed literal opener, then a second call.
+        let message = format!(
+            "{}{}",
+            bash_call("grep -n '<tool_call>' p.py"),
+            bash_call("ls")
+        );
+        let (calls, _) = parse_with(&message, &bash_tools());
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(calls[0].1["command"], "grep -n '<tool_call>' p.py");
+        assert_eq!(calls[1].1["command"], "ls");
+
+        // The second call is to an undeclared tool: still two calls.
+        let message = format!(
+            "{}<tool_call>read_file<arg_key>path</arg_key><arg_value>a.txt</arg_value></tool_call>",
+            bash_call("ls")
+        );
+        let (calls, _) = parse_with(&message, &bash_tools());
+        assert_eq!(
+            calls[0],
+            ("bash".to_string(), serde_json::json!({"command": "ls"}))
+        );
+        assert_eq!(
+            calls[1],
+            (
+                "read_file".to_string(),
+                serde_json::json!({"path": "a.txt"})
+            )
+        );
+    }
+
+    #[test]
+    fn test_multi_parameter_tool_with_markup_in_values() {
+        let old_str = "x = \"</arg_value>\"\nend = \"</tool_call>\"";
+        let new_str = format!("FIXTURE = \"{FIXTURE}\"");
+        let message = format!(
+            "<tool_call>edit<arg_key>path</arg_key><arg_value>t.py</arg_value><arg_key>old_str</arg_key><arg_value>{old_str}</arg_value><arg_key>new_str</arg_key><arg_value>{new_str}</arg_value></tool_call>"
+        );
+        let (calls, text) = parse_with(&message, &edit_tools());
+        assert_eq!(
+            calls,
+            [(
+                "edit".to_string(),
+                serde_json::json!({"path": "t.py", "old_str": old_str, "new_str": new_str})
+            )]
+        );
+        assert_eq!(text, "");
+
+        // A value holding a complete `<arg_key>path</arg_key><arg_value>` sequence: `path`
+        // is already given and the literal pairs only close at the real end, so it stays
+        // text in the value.
+        let new_str = "a <arg_value>1</arg_value><arg_key>path</arg_key><arg_value>2</arg_value> b";
+        let message = format!(
+            "<tool_call>edit<arg_key>path</arg_key><arg_value>t.py</arg_value><arg_key>new_str</arg_key><arg_value>{new_str}</arg_value></tool_call>"
+        );
+        let (calls, _) = parse_with(&message, &edit_tools());
+        assert_eq!(
+            calls[0].1,
+            serde_json::json!({"path": "t.py", "new_str": new_str})
+        );
+    }
+
+    #[test]
+    fn test_undeclared_parameters_and_repeated_keys_stay_parameters() {
+        // No reading with declared keys closes every literal pair, so the undeclared and
+        // repeated keys are the model's arguments, as before.
+        let message = "<tool_call>edit<arg_key>path</arg_key><arg_value>a.py</arg_value><arg_key>old_string</arg_key><arg_value>x</arg_value><arg_key>new_string</arg_key><arg_value>y</arg_value></tool_call>";
+        let (calls, _) = parse_with(message, &edit_tools());
+        assert_eq!(
+            calls[0].1,
+            serde_json::json!({"path": "a.py", "old_string": "x", "new_string": "y"})
+        );
+        let message = "<tool_call>edit<arg_key>path</arg_key><arg_value>a.py</arg_value><arg_key>path</arg_key><arg_value>b.py</arg_value></tool_call>";
+        let (calls, _) = parse_with(message, &edit_tools());
+        assert_eq!(calls[0].1, serde_json::json!({"path": "b.py"}));
+    }
+
+    #[test]
+    fn test_scanned_end_matches_batch_parse_while_streaming() {
+        // The streamed boundary decides a call only once the next call shows, and never
+        // inside a value.
+        let config = get_test_config();
+        let tools = bash_tools();
+        let first = bash_call(&format!("cat > a <<'EOF'\n{FIXTURE}\nEOF"));
+        let message = format!("{first}{}", bash_call("ls"));
+        for cut in 0..=message.len() {
+            if !message.is_char_boundary(cut) {
+                continue;
+            }
+            let boundary =
+                find_complete_tool_call_end_position_glm47(&message[..cut], &config, Some(&tools));
+            match boundary {
+                Glm47StreamBoundary::Complete(end) => {
+                    assert_eq!(end, first.len(), "cut {cut}");
+                    assert!(cut >= first.len() + "<tool_call>bash<".len(), "cut {cut}");
+                }
+                Glm47StreamBoundary::Undecided => {
+                    assert!(
+                        cut < first.len() + "<tool_call>bash<arg_key>".len(),
+                        "cut {cut}"
+                    )
+                }
+                Glm47StreamBoundary::NotACall => assert!(cut < "<tool_call>".len(), "cut {cut}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_undeclared_call_followed_by_text_is_text() {
+        // GLM-5.3-Flash showed the fixture in a code block, then made the call. The code
+        // block is ordinary text (the tag tokens appear only in the call): a call to an
+        // undeclared tool counts only where calls stand, at the end or before another call.
+        let block = format!("```bash\ncat > /tmp/fixture.txt <<'EOF'\n{FIXTURE}\nEOF\n```");
+        for (message, prose) in [
+            (
+                format!(
+                    "{block}\n\nTo verify it:{}",
+                    bash_call("cat /tmp/fixture.txt")
+                ),
+                format!("{block}\n\nTo verify it:"),
+            ),
+            (
+                format!("{block}{}", bash_call("cat /tmp/fixture.txt")),
+                block.clone(),
+            ),
+        ] {
+            let (calls, text) = parse_with(&message, &bash_tools());
+            assert_eq!(
+                calls,
+                [(
+                    "bash".to_string(),
+                    serde_json::json!({"command": "cat /tmp/fixture.txt"})
+                )]
+            );
+            assert_eq!(text, prose);
+        }
+        // A call to an undeclared tool at the end of the output is still returned.
+        let (calls, _) = parse_with(&format!("Calling it.{FIXTURE}"), &bash_tools());
+        assert_eq!(
+            calls,
+            [(
+                "get_weather".to_string(),
+                serde_json::json!({"city": "Paris"})
+            )]
+        );
+    }
+
+    #[test]
+    fn test_provider_value_tail_is_not_a_bare_call() {
+        // A provider lost `<tool_call>img_gen<arg_key>prompt</arg_key><arg_value>` and
+        // returned the rest as content. A call name is followed by `<arg_key>` or
+        // `</tool_call>`, so `logo</arg_value>…` is the tail of a value, not a call body.
+        for message in [
+            "a minimalist logo</arg_value><arg_key>width</arg_key><arg_value>1024</arg_value></tool_call>",
+            "flat 2D illustration style</arg_value><arg_key>width</arg_key><arg_value>1024</arg_value><arg_key>height</arg_key><arg_value>768</arg_value></tool_call>",
+        ] {
+            let (calls, text) =
+                try_tool_call_parse_glm47(message, &get_test_config(), Some(&image_tools()))
+                    .unwrap();
+            assert!(calls.is_empty(), "{calls:?}");
+            assert!(!text.unwrap_or_default().contains("</arg_value>"));
+            assert_eq!(
+                find_tool_call_end_position_glm47(message, &get_test_config()),
+                message.len()
+            );
+        }
     }
 }

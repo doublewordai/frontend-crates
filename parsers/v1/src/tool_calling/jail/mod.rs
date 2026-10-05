@@ -46,10 +46,18 @@ use crate::tool_calling::gemma4::split_partial_call_prefix_gemma4;
 use crate::tool_calling::json::base_json_parser::parse_indexed_calls;
 use crate::tool_calling::json::{JsonParserType, try_tool_call_parse_basic_json};
 use crate::tool_calling::parsers::get_tool_parser_map;
+use crate::tool_calling::xml::{
+    Glm47StreamBoundary, contains_glm47_tag, find_complete_tool_call_end_position_glm47,
+    find_tool_call_group_end_glm47_at_eof,
+};
 use crate::tool_calling::{
     ToolCallResponse, detect_tool_call_start, find_tool_call_end_position,
     try_tool_call_parse_aggregate, try_tool_call_parse_aggregate_finalize,
 };
+
+/// Bytes in the longest GLM-4.7 tag (`</tool_call>`, `</arg_value>`), so a tag split
+/// across chunks is still seen whole.
+const GLM47_LONGEST_TAG: usize = 12;
 
 pub use self::annotated::Annotated;
 use self::prefix_matcher::{MarkerMatcher, MatchResult};
@@ -228,6 +236,9 @@ struct JailCompletionProgress {
     pending_end_marker: Option<usize>,
     pending_parse: Option<ParsedToolCalls>,
     json: JsonCompletionProgress,
+    /// GLM-4.7: buffer length at the last schema-aware scan. Only a new tag can
+    /// decide a call, so the buffer is scanned again only when one arrives.
+    glm47_scanned_len: usize,
 }
 
 impl JailCompletionProgress {
@@ -236,6 +247,7 @@ impl JailCompletionProgress {
         self.pending_end_marker = None;
         self.pending_parse = None;
         self.json.reset();
+        self.glm47_scanned_len = 0;
     }
 }
 
@@ -622,9 +634,38 @@ impl ChoiceJailState {
             return;
         }
 
+        let matched = jail_stream.marker_matcher.process_chunk(content, "");
+        // GLM-4.7 releases a call when the next one shows, so the trailing text can be
+        // prose followed by that call. Release the prose and jail from the call, as for
+        // a fresh chunk; jailing both would return the prose with the next call's markup
+        // when that call never closes.
+        if jail_stream.is_glm47()
+            && let MatchResult::Complete {
+                prefix,
+                marker,
+                suffix,
+                ..
+            } = &matched
+        {
+            if !prefix.is_empty() {
+                #[allow(deprecated)]
+                let trailing_choice = create_choice_stream(
+                    choice.index,
+                    choice.delta.role,
+                    prefix,
+                    None,
+                    None,
+                    choice.logprobs.clone(),
+                );
+                emissions.push(ChoiceEmission::Trailing(trailing_choice));
+            }
+            self.begin_jail(format!("{marker}{suffix}"), None);
+            return;
+        }
+
         if let MatchResult::Partial {
             prefix, partial, ..
-        } = jail_stream.marker_matcher.process_chunk(content, "")
+        } = matched
         {
             if !prefix.is_empty() {
                 #[allow(deprecated)]
@@ -1025,16 +1066,34 @@ impl ChoiceJailState {
                 self.accumulated_logprobs.clone(),
             );
 
+            // GLM-4.7 holds a call until the text after it shows where it ends, so text
+            // after the last call can still be in the buffer here. Prose there streams as
+            // content, as it did when the call was released at its end marker.
+            let (calls_text, after_calls) =
+                jail_stream.glm47_split_at_end(&self.accumulated_content);
             let mut final_choice = jail_stream
                 .create_tool_call_choice(
                     self.index,
-                    &self.accumulated_content,
+                    calls_text,
                     &dummy_choice,
                     self.emitted_tool_calls_count,
                     true, // finalize: enable EOF recovery for missing-end-token / truncated-JSON
                     None,
                 )
                 .await;
+            if let Some(after_calls) = after_calls {
+                match final_choice.delta.content.as_mut() {
+                    Some(dynamo_protocols::types::ChatCompletionMessageContent::Text(text)) => {
+                        text.push_str(after_calls)
+                    }
+                    _ => {
+                        final_choice.delta.content =
+                            Some(dynamo_protocols::types::ChatCompletionMessageContent::Text(
+                                after_calls.to_string(),
+                            ))
+                    }
+                }
+            }
             // Attach the full accumulated logprobs to the final choice
             final_choice.logprobs = self.take_accumulated_logprobs();
             // Same rule as normal completion: a truncated payload still rebuilds every
@@ -1539,6 +1598,40 @@ impl JailedStream {
         )
     }
 
+    /// At the end of the stream, split a GLM-4.7 buffer that starts with calls into the
+    /// calls and the text after them, when that text holds no GLM tag. Otherwise the whole
+    /// buffer goes to the parser.
+    fn glm47_split_at_end<'b>(&self, buffer: &'b str) -> (&'b str, Option<&'b str>) {
+        let Some(ParserConfig::Glm47(config)) = self
+            .tool_call_parser
+            .as_deref()
+            .and_then(|parser| get_tool_parser_map().get(parser))
+            .map(|config| &config.parser_config)
+        else {
+            return (buffer, None);
+        };
+        match find_tool_call_group_end_glm47_at_eof(
+            buffer,
+            config,
+            self.tool_definitions.as_deref(),
+        ) {
+            Some(end) if end < buffer.len() && !contains_glm47_tag(&buffer[end..], config) => {
+                (&buffer[..end], Some(&buffer[end..]))
+            }
+            _ => (buffer, None),
+        }
+    }
+
+    fn is_glm47(&self) -> bool {
+        matches!(
+            self.tool_call_parser
+                .as_deref()
+                .and_then(|parser| get_tool_parser_map().get(parser))
+                .map(|config| &config.parser_config),
+            Some(ParserConfig::Glm47(_))
+        )
+    }
+
     fn should_start_jail(&self, content: &str) -> bool {
         // Path 1: Check configured start sequences
         let sequence_match = !self.jail_start_sequences.is_empty()
@@ -1707,6 +1800,56 @@ impl JailedStream {
                         split_pos,
                         marker_parse_result,
                     });
+                }
+
+                // GLM-4.7 writes string arguments raw, so `</tool_call>` and
+                // `</arg_value>` can be text inside a value (a heredoc that writes
+                // a tool-call fixture). The schema-aware scan decides where the
+                // calls end; the lexical end-marker scan below would cut them at
+                // the first end marker. Buffers that do not start with a call
+                // (bare bodies, stray markup) keep the end-marker handling.
+                if let Some(ParserConfig::Glm47(glm47_config)) = self
+                    .tool_call_parser
+                    .as_deref()
+                    .and_then(|parser| get_tool_parser_map().get(parser))
+                    .map(|config| &config.parser_config)
+                {
+                    let tail_start = progress
+                        .glm47_scanned_len
+                        .min(accumulated_content.len())
+                        .saturating_sub(GLM47_LONGEST_TAG - 1);
+                    let tail_start = (0..=tail_start)
+                        .rev()
+                        .find(|&i| accumulated_content.is_char_boundary(i))
+                        .unwrap_or(0);
+                    let first_scan = progress.glm47_scanned_len == 0;
+                    progress.glm47_scanned_len = accumulated_content.len();
+                    if !first_scan
+                        && !contains_glm47_tag(&accumulated_content[tail_start..], glm47_config)
+                    {
+                        return JailCompletion::Incomplete;
+                    }
+                    match find_complete_tool_call_end_position_glm47(
+                        accumulated_content,
+                        glm47_config,
+                        self.tool_definitions.as_deref(),
+                    ) {
+                        Glm47StreamBoundary::Complete(split_pos) => {
+                            let marker_parse_result = match self
+                                .parse_marker_tool_calls(&accumulated_content[..split_pos])
+                                .await
+                            {
+                                Ok(parsed) if !parsed.0.is_empty() => Some(Ok(parsed)),
+                                _ => None,
+                            };
+                            return JailCompletion::Complete(CompletedJail {
+                                split_pos,
+                                marker_parse_result,
+                            });
+                        }
+                        Glm47StreamBoundary::Undecided => return JailCompletion::Incomplete,
+                        Glm47StreamBoundary::NotACall => {}
+                    }
                 }
 
                 if let Some(parsed) = progress.pending_parse.take() {
