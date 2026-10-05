@@ -550,9 +550,9 @@ fn attr_value<'a>(attrs: &'a [(String, String)], key: &str) -> Option<&'a str> {
 fn tool_call_id(name: &str, index: Option<&str>) -> String {
     match index.filter(|index| !index.is_empty()) {
         None => name.to_string(),
-        Some(raw) => match raw.parse::<i64>() {
-            Ok(one_based) => format!("{name}:{}", one_based - 1),
-            Err(_) => format!("{name}:{raw}"),
+        Some(raw) => match raw.parse::<i64>().ok().and_then(|one| one.checked_sub(1)) {
+            Some(zero_based) => format!("{name}:{zero_based}"),
+            None => format!("{name}:{raw}"),
         },
     }
 }
@@ -663,6 +663,26 @@ mod tests {
         assert_eq!(calls[0].id, "first:2");
         assert_eq!(calls[1].id, "second:raw");
         assert_eq!(calls[2].id, "third");
+    }
+
+    #[test]
+    fn index_at_the_i64_bounds_does_not_overflow_the_id() {
+        let input = tools(
+            &[
+                call("tool=\"low\" index=\"-9223372036854775808\"", ""),
+                call("tool=\"high\" index=\"9223372036854775807\"", ""),
+            ]
+            .concat(),
+        );
+
+        let (calls, _) = parse(&input);
+
+        let ids: Vec<&str> = calls.iter().map(|call| call.id.as_str()).collect();
+        // `i64::MIN` has no predecessor, so that id keeps the index as written.
+        assert_eq!(
+            ids,
+            ["low:-9223372036854775808", "high:9223372036854775806"]
+        );
     }
 
     #[test]
