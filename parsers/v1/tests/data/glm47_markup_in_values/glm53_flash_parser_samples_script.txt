@@ -1,0 +1,34 @@
+The heredoc with backticks is problematic. Let me build the file with python itself.<tool_call>bash<arg_key>command</arg_key><arg_value>cd /tmp/w && python3 - <<'PYEOF'
+lines = [
+ 'import json',
+ 'S = chr(0x2581)',
+ 'FV = chr(0xFF5C)',
+ 'DSML = FV + "DSML" + FV',
+ 'def step3(mark):',
+ '    return chr(0x2595) + mark + chr(0x2595)',
+ 'tc = chr(60) + "tool_call" + chr(62)',
+ 'samples = {}',
+ 'glm = tc + "\\nget_weather\\n<arg_key>city</arg_key>\\n<arg_value>San Francisco</arg_value>\\n</tool_call>"',
+ 'samples["glm"] = glm',
+ 'samples["glm45"] = glm',
+ 'samples["glm47"] = glm',
+ 'samples["mimo"] = tc + "\\n<function=get_weather>\\n<parameter=city>San Francisco</parameter>\\n</function>\\n</tool_call>"',
+ 'samples["qwen3_coder"] = tc + "\\n<function=get_weather>\\n<parameter=city>\\nSan Francisco\\n</parameter>\\n</function>\\n</tool_call>"',
+ 'samples["step3p5"] = tc + "\\n<function=get_weather>\\n<parameter=city>\\nSan Francisco\\n</parameter>\\n</function>\\n</tool_call>"',
+ 'samples["step3"] = step3("tool_calls_begin") + step3("tool_call_begin") + "function" + step3("tool_sep") + \'<steptml:invoke name="get_weather">\\n<steptml:parameter name="city">San Francisco</steptml:parameter>\\n</steptml:invoke>\' + step3("tool_call_end") + step3("tool_calls_end")',
+ 'dsv3 = "<" + FV + "tool" + S + "calls" + S + "begin" + FV + ">" + "<" + FV + "tool" + S + "call" + S + "begin" + FV + ">function<" + FV + "tool" + S + "sep" + FV + ">get_weather\\n```json\\n" + \'{"city": "San Francisco"}\' + "\\n```\\n" + "<" + FV + "tool" + S + "call" + S + "end" + FV + ">" + "<" + FV + "tool" + S + "calls" + S + "end" + FV + ">"',
+ 'samples["deepseekv3"] = dsv3',
+ 'samples["deepseekv31"] = "<" + FV + "tool" + S + "calls" + S + "begin" + FV + ">" + "<" + FV + "tool" + S + "call" + S + "begin" + FV + ">get_weather<" + FV + "tool" + S + "sep" + FV + ">" + \'{"city": "San Francisco"}\' + "<" + FV + "tool" + S + "call" + S + "end" + FV + ">" + "<" + FV + "tool" + S + "calls" + S + "end" + FV + ">"',
+ 'samples["deepseekv32"] = DSML.join(["<", "function_calls>\\n", \'invoke name="get_weather">\\n<\', \'parameter name="city" string="true">San Francisco</\', "parameter>\\n</", "invoke>\\n</", "function_calls>"])',
+ 'samples["deepseekv4"] = DSML.join(["<", "tool_calls>\\n", \'invoke name="get_weather">\\n<\', \'parameter name="city" string="true">San Francisco</\', "parameter>\\n</", "invoke>\\n</", "tool_calls>"])',
+ 'samples["minimax-m2"] = "<minimax:tool_call>\\n<invoke name=\\"get_weather\\">\\n<parameter name=\\"city\\">San Francisco</parameter>\\n</invoke>\\n</minimax:tool_call>"',
+ 'samples["gemma4"] = "<|tool_call>call:get_weather{city:<|\\"|>San Francisco<|\\"|>}<tool_call|>"',
+ 'samples["pythonic"] = "<|python_start|>[get_weather(city=\\"San Francisco\\")]<|python_end|>"',
+ 'samples["gpt-oss"] = "<|channel|>commentary to=functions.get_weather<|message|>{\\"city\\": \\"San Francisco\\"}<|call|>"',
+ 'samples["gigachat3"] = "<|function_call|>{\\"name\\": \\"get_weather\\", \\"arguments\\": {\\"city\\": \\"San Francisco\\"}}"',
+ 'json.dump(samples, open("samples.json", "w"), indent=1)',
+]
+open("mk3.py", "w").write("\n".join(lines) + "\n")
+print("written")
+PYEOF
+cd /tmp/w && python3 mk3.py && python3 -c "import json; d=json.load(open('samples.json')); [print(k, repr(v)) for k,v in d.items()]"</arg_value></tool_call>
