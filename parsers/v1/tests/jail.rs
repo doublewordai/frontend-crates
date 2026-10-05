@@ -3302,6 +3302,251 @@ mod parallel_jail_tests {
         }
     }
 
+    /// (name, arguments) of every streamed tool call, joining argument deltas by index.
+    fn streamed_calls(
+        results: &[Annotated<CreateChatCompletionStreamResponse>],
+    ) -> Vec<(String, serde_json::Value)> {
+        let mut calls: Vec<(String, String)> = Vec::new();
+        for result in results {
+            for choice in &result.data.as_ref().unwrap().choices {
+                for call in choice.delta.tool_calls.iter().flatten() {
+                    let index = call.index as usize;
+                    if calls.len() <= index {
+                        calls.resize(index + 1, (String::new(), String::new()));
+                    }
+                    if let Some(function) = &call.function {
+                        if let Some(name) = &function.name {
+                            calls[index].0.push_str(name);
+                        }
+                        if let Some(arguments) = &function.arguments {
+                            calls[index].1.push_str(arguments);
+                        }
+                    }
+                }
+            }
+        }
+        calls
+            .into_iter()
+            .map(|(name, args)| (name, serde_json::from_str(&args).unwrap()))
+            .collect()
+    }
+
+    async fn stream_glm47(
+        text: &str,
+        chunk_size: usize,
+        tools: &[dynamo_parsers::tool_calling::ToolDefinition],
+    ) -> Vec<Annotated<CreateChatCompletionStreamResponse>> {
+        let mut chunks = Vec::new();
+        let mut rest = text;
+        while !rest.is_empty() {
+            let mut cut = chunk_size.min(rest.len());
+            while !rest.is_char_boundary(cut) {
+                cut += 1;
+            }
+            chunks.push(test_utils::create_mock_response_chunk(
+                rest[..cut].to_string(),
+                0,
+            ));
+            rest = &rest[cut..];
+        }
+        chunks.push(test_utils::create_final_response_chunk(0));
+        JailedStream::builder()
+            .tool_call_parser("glm47")
+            .tool_definitions(tools.to_vec())
+            .build()
+            .apply_with_finish_reason(stream::iter(chunks))
+            .collect()
+            .await
+    }
+
+    fn glm47_bash_tools() -> Vec<dynamo_parsers::tool_calling::ToolDefinition> {
+        vec![dynamo_parsers::tool_calling::ToolDefinition {
+            name: "bash".to_string(),
+            parameters: Some(json!({
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+            })),
+            strict: None,
+        }]
+    }
+
+    fn glm47_bash_call(command: &str) -> String {
+        format!(
+            "<tool_call>bash<arg_key>command</arg_key><arg_value>{command}</arg_value></tool_call>"
+        )
+    }
+
+    /// GLM writes string arguments raw, so a bash command can hold GLM's own markup (a
+    /// heredoc that writes a tool-call fixture, a parser test). Whatever the chunking,
+    /// the jail returns the command whole and releases none of it as content.
+    #[tokio::test]
+    async fn test_glm47_markup_in_command_streams_whole() {
+        let fixture =
+            "<tool_call>get_weather<arg_key>city</arg_key><arg_value>Paris</arg_value></tool_call>";
+        let tools = glm47_bash_tools();
+        let recorded = [
+            include_str!("data/glm47_markup_in_values/glm53_qwen_parser_test_script.txt"),
+            include_str!("data/glm47_markup_in_values/glm53_qwen_parser_test_script_2.txt"),
+            include_str!("data/glm47_markup_in_values/glm53_flash_parser_samples_script.txt"),
+            include_str!("data/glm47_markup_in_values/glm53_flash_fixture_heredoc.txt"),
+        ];
+        let mut cases: Vec<(String, String, Vec<String>)> = recorded
+            .iter()
+            .map(|text| {
+                let call = text.find("<tool_call>").unwrap();
+                let start = text.find("<arg_value>").unwrap() + "<arg_value>".len();
+                let end = text.rfind("</arg_value>").unwrap();
+                (
+                    text.to_string(),
+                    text[..call].to_string(),
+                    vec![text[start..end].to_string()],
+                )
+            })
+            .collect();
+        let heredoc = format!("cat > /tmp/fixture.txt <<'EOF'\n{fixture}\nEOF");
+        // The fixture shown in a code block before the call is text.
+        let block = format!("```bash\n{heredoc}\n```\n\nTo verify it:");
+        cases.push((
+            format!("{block}{}", glm47_bash_call("cat /tmp/fixture.txt")),
+            block.clone(),
+            vec!["cat /tmp/fixture.txt".to_string()],
+        ));
+        cases.push((
+            glm47_bash_call(&heredoc),
+            String::new(),
+            vec![heredoc.clone()],
+        ));
+        cases.push((
+            format!(
+                "Writing it.{}\n{}",
+                glm47_bash_call(&heredoc),
+                glm47_bash_call("grep -c '</tool_call>' /tmp/fixture.txt")
+            ),
+            "Writing it.".to_string(),
+            vec![
+                heredoc.clone(),
+                "grep -c '</tool_call>' /tmp/fixture.txt".to_string(),
+            ],
+        ));
+
+        for (text, prose, commands) in &cases {
+            let expected: Vec<_> = commands
+                .iter()
+                .map(|c| ("bash".to_string(), json!({"command": c})))
+                .collect();
+            for size in [1, 2, 3, 5, 7, 12, 16, 64, text.len()] {
+                let results = stream_glm47(text, size, &tools).await;
+                assert_eq!(streamed_calls(&results), expected, "chunk size {size}");
+                assert_eq!(
+                    &test_utils::reconstruct_content(&results),
+                    prose,
+                    "chunk size {size}"
+                );
+            }
+        }
+    }
+
+    /// Without declared tools a call followed by prose is still a call: it is released
+    /// when the next call shows, and the prose streams as content.
+    #[tokio::test]
+    async fn test_glm47_call_then_prose_without_declared_tools() {
+        let chunks = vec![
+            test_utils::create_mock_response_chunk(
+                "<tool_call>get_weather<arg_key>city</arg_key><arg_value>Boston</arg_value></tool_call>"
+                    .to_string(),
+                0,
+            ),
+            test_utils::create_mock_response_chunk(
+                "tail prose <tool_call>get_time<arg_key>tz</arg_key><arg_value>US/E".to_string(),
+                0,
+            ),
+            test_utils::create_final_response_chunk(0),
+        ];
+        let results: Vec<_> = JailedStream::builder()
+            .tool_call_parser("glm47")
+            .build()
+            .apply_with_finish_reason(stream::iter(chunks))
+            .collect()
+            .await;
+        assert_eq!(
+            streamed_calls(&results),
+            [("get_weather".to_string(), json!({"city": "Boston"}))]
+        );
+        assert_eq!(test_utils::reconstruct_content(&results), "tail prose ");
+    }
+
+    /// Prose after the last call streams as content once the stream ends.
+    #[tokio::test]
+    async fn test_glm47_prose_after_the_last_call_streams() {
+        for tools in [glm47_bash_tools(), vec![]] {
+            let chunks = vec![
+                test_utils::create_mock_response_chunk(glm47_bash_call("ls"), 0),
+                test_utils::create_mock_response_chunk("tail prose ".to_string(), 0),
+                test_utils::create_final_response_chunk(0),
+            ];
+            let results: Vec<_> = JailedStream::builder()
+                .tool_call_parser("glm47")
+                .tool_definitions(tools)
+                .build()
+                .apply_with_finish_reason(stream::iter(chunks))
+                .collect()
+                .await;
+            assert_eq!(
+                streamed_calls(&results),
+                [("bash".to_string(), json!({"command": "ls"}))]
+            );
+            assert_eq!(test_utils::reconstruct_content(&results), "tail prose ");
+        }
+    }
+
+    /// Two calls in a row stream as two calls, the first one as soon as the second
+    /// call's name shows that it is a new call.
+    #[tokio::test]
+    async fn test_glm47_first_call_is_released_when_the_next_starts() {
+        let tools = glm47_bash_tools();
+        let first = glm47_bash_call("cat <<'EOF'\n</arg_value></tool_call>\nEOF");
+        let chunks = vec![
+            test_utils::create_mock_response_chunk(first.clone(), 0),
+            test_utils::create_mock_response_chunk("<tool_call>bash<arg_key>".to_string(), 0),
+            test_utils::create_mock_response_chunk(
+                "command</arg_key><arg_value>ls</arg_value></tool_call>".to_string(),
+                0,
+            ),
+            test_utils::create_final_response_chunk(0),
+        ];
+        let results: Vec<_> = JailedStream::builder()
+            .tool_call_parser("glm47")
+            .tool_definitions(tools)
+            .build()
+            .apply_with_finish_reason(stream::iter(chunks))
+            .collect()
+            .await;
+        let first_with_calls = results
+            .iter()
+            .position(|r| {
+                r.data
+                    .as_ref()
+                    .is_some_and(|d| d.choices.iter().any(|c| c.delta.tool_calls.is_some()))
+            })
+            .unwrap();
+        assert!(
+            first_with_calls <= 1,
+            "first call held until {first_with_calls}"
+        );
+        assert_eq!(
+            streamed_calls(&results),
+            [
+                (
+                    "bash".to_string(),
+                    json!({"command": "cat <<'EOF'\n</arg_value></tool_call>\nEOF"})
+                ),
+                ("bash".to_string(), json!({"command": "ls"})),
+            ]
+        );
+        assert_eq!(test_utils::reconstruct_content(&results), "");
+    }
+
     // =============================================================================
     // 2. PARALLEL TOOL CALLS ACROSS MULTIPLE CHUNKS (STREAMING)
     // =============================================================================

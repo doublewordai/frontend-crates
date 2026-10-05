@@ -1,0 +1,7 @@
+<tool_call>bash<arg_key>command</arg_key><arg_value>cat > /tmp/fixture.txt <<'EOF'
+<do_not_open>tool_call>
+<name>get_weather</name>
+<args>{"city": "Paris"}</args>
+</tool_call>
+EOF
+cat /tmp/fixture.txt</arg_value></tool_call>
