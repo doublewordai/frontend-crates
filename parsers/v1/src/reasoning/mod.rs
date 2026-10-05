@@ -186,8 +186,10 @@ pub enum ReasoningParserType {
     /// GLM-4.5 / 4.7 / 5.x: `<think>...</think>`, not forced. The chat template
     /// opens the reasoning block in the prompt when thinking is on, and the
     /// model can go from its thinking straight into a `<tool_call>` without
-    /// writing `</think>`. A tool-call opener therefore ends the reasoning block,
-    /// so the call reaches the tool-call parser instead of `reasoning_content`.
+    /// writing `</think>`. A tool-call opener ends the reasoning block when no
+    /// `</think>` follows it, so the call reaches the tool-call parser instead of
+    /// `reasoning_content`. When a `</think>` does follow, the call syntax was
+    /// part of the thinking (the model quoting an earlier call) and stays there.
     Glm45,
     Kimi,
     KimiK25,
@@ -274,7 +276,8 @@ impl ReasoningParserType {
             ReasoningParserType::Glm45 => ReasoningParserWrapper {
                 parser: Box::new(
                     BasicReasoningParser::new("<think>".into(), "</think>".into(), false, true)
-                        .with_tool_start_token(GLM_TOOL_CALL_BEGIN),
+                        .with_tool_start_token(GLM_TOOL_CALL_BEGIN)
+                        .with_tentative_tool_exit(),
                 ),
             },
             ReasoningParserType::Kimi => ReasoningParserWrapper {
@@ -519,6 +522,74 @@ mod tests {
                 "chunks: {chunks:?}"
             );
         }
+    }
+
+    /// Recorded GLM-5.3-Flash completion shape (synthetic image-agent conversation): while
+    /// thinking, the model quoted the calls from an earlier turn, kept thinking, then closed the
+    /// block and made the real call.
+    const GLM_QUOTED_CALL: &str = "<tool_call>remove_background<arg_key>keep_shadow</arg_key><arg_value>false</arg_value></tool_call>";
+    const GLM_REAL_CALL: &str = "<tool_call>remove_background<arg_key>image_id</arg_key><arg_value>img_f0998a</arg_value></tool_call>";
+
+    #[test]
+    fn test_glm45_quoted_call_followed_by_think_close_stays_reasoning() {
+        let mut parser = ReasoningParserType::get_reasoning_parser_from_name("glm45");
+        parser.set_in_reasoning(true);
+        let text = format!(
+            "The earlier turn was:\n\"{GLM_QUOTED_CALL}\"\nSo it had no image_id.</think>{GLM_REAL_CALL}"
+        );
+        let result = parser.detect_and_parse_reasoning(&text, &[]);
+
+        assert_eq!(
+            result.reasoning_text,
+            format!("The earlier turn was:\n\"{GLM_QUOTED_CALL}\"\nSo it had no image_id.")
+        );
+        assert_eq!(result.normal_text, GLM_REAL_CALL);
+    }
+
+    #[test]
+    fn test_glm45_streaming_quoted_call_followed_by_think_close_stays_reasoning() {
+        let chunks = [
+            "The earlier turn was:\n\"",
+            "<tool_call>remove_background<arg_key>",
+            "keep_shadow</arg_key><arg_value>false</arg_value></tool_call>\"\n",
+            "So it had no image_id.</th",
+            "ink><tool_call>remove_background<arg_key>image_id</arg_key>",
+            "<arg_value>img_f0998a</arg_value></tool_call>",
+        ];
+        let mut parser = ReasoningParserType::get_reasoning_parser_from_name("glm45");
+        parser.set_in_reasoning(true);
+        let mut reasoning = String::new();
+        let mut normal = String::new();
+        for chunk in chunks {
+            let result = parser.parse_reasoning_streaming_incremental(chunk, &[]);
+            reasoning.push_str(&result.reasoning_text);
+            normal.push_str(&result.normal_text);
+        }
+        let result = parser.finish_reasoning_stream();
+        reasoning.push_str(&result.reasoning_text);
+        normal.push_str(&result.normal_text);
+
+        assert_eq!(
+            reasoning,
+            format!("The earlier turn was:\n\"{GLM_QUOTED_CALL}\"\nSo it had no image_id.")
+        );
+        assert_eq!(normal, GLM_REAL_CALL);
+    }
+
+    #[test]
+    fn test_glm45_streaming_call_without_close_is_released_at_end_of_stream() {
+        let mut parser = ReasoningParserType::get_reasoning_parser_from_name("glm45");
+        parser.set_in_reasoning(true);
+        let first = parser.parse_reasoning_streaming_incremental("Let me search.", &[]);
+        let held = parser.parse_reasoning_streaming_incremental(GLM_CALL_WITHOUT_THINK_CLOSE, &[]);
+        assert_eq!(first.reasoning_text, "Let me search.");
+        assert!(
+            held.normal_text.is_empty() && held.reasoning_text.is_empty(),
+            "held until a close or the end of the stream"
+        );
+        let end = parser.finish_reasoning_stream();
+        assert_eq!(end.normal_text, GLM_CALL_WITHOUT_THINK_CLOSE);
+        assert_eq!(end.reasoning_text, "");
     }
 
     #[test]
