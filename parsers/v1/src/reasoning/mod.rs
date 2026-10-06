@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+mod atomic_markers;
 mod base_parser;
 mod gemma4_parser;
 mod gpt_oss_parser;
@@ -12,6 +13,7 @@ mod minimax_append_think_parser;
 
 // Re-export main types and functions for convenience
 pub(crate) use crate::tool_calling::config::MINIMAX_M3_TOOL_NAMESPACE;
+pub use atomic_markers::AtomicMarkerParser;
 pub use base_parser::BasicReasoningParser;
 pub use gemma4_parser::Gemma4ReasoningParser;
 pub use gpt_oss_parser::{GptOssReasoningParser, harmony_terminator_token_ids};
@@ -238,6 +240,29 @@ impl ReasoningParser for ReasoningParserWrapper {
 
     fn set_in_reasoning(&mut self, in_reasoning: bool) {
         self.parser.set_in_reasoning(in_reasoning)
+    }
+}
+
+impl ReasoningParserWrapper {
+    /// Treat these markers as single special tokens: an occurrence whose token is not in the
+    /// chunk's token ids is ordinary text. See [`AtomicMarkerParser`].
+    pub fn with_atomic_markers(self, markers: Vec<(String, u32)>) -> Self {
+        if markers.is_empty() {
+            return self;
+        }
+        ReasoningParserWrapper {
+            parser: Box::new(AtomicMarkerParser::new(self.parser, markers)),
+        }
+    }
+}
+
+/// The reasoning and tool-call markers a parser reacts to, for families whose tokenizers make each
+/// of them one added token. Callers look up the ids and pass those that resolve to
+/// [`ReasoningParserWrapper::with_atomic_markers`].
+pub fn atomic_marker_candidates(parser_name: &str) -> &'static [&'static str] {
+    match parser_name.to_lowercase().as_str() {
+        "glm45" => &["<think>", "</think>", GLM_TOOL_CALL_BEGIN],
+        _ => &[],
     }
 }
 
