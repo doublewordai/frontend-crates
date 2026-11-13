@@ -5,6 +5,7 @@ pub mod basetenkenizer;
 pub mod cache;
 pub mod fastokens;
 pub mod hf;
+pub mod tekken;
 pub mod tiktoken;
 
 // TODO: Add tokenizer benchmarks
@@ -19,9 +20,13 @@ use anyhow::Context as _;
 pub use anyhow::{Error, Result};
 
 pub use basetenkenizer::BasetenTokenizer;
-pub use cache::{CacheTokenUsage, CacheTokenUsageFn, CachedTokenizer, L1CacheStats};
-pub use fastokens::FastTokenizer;
+pub use cache::{
+    CacheTokenUsage, CacheTokenUsageFn, CachedTokenizer, L1CacheStats, SharedTokenizerCache,
+    SharedTokenizerCacheStats,
+};
+pub use fastokens::{FastTikTokenTokenizer, FastTokenizer};
 pub use hf::HuggingFaceTokenizer;
+pub use tekken::TekkenTokenizer;
 pub use tiktoken::TikTokenTokenizer;
 pub use traits::DecodeResult;
 
@@ -53,6 +58,24 @@ impl<'a> EncodeSegment<'a> {
     pub const fn control(text: &'a str) -> Self {
         Self::new(text, true)
     }
+}
+
+/// Reject an ordinary segment that encoded to a control-token id.
+///
+/// Every backend demotes control-token spellings in ordinary segments, but a
+/// base vocabulary whose merges assemble an added token's id would still let
+/// request text become a control token. Refusing the encode keeps that
+/// property independent of the vocabulary.
+pub(crate) fn reject_control_ids_in_ordinary_segment(
+    ids: &[TokenIdType],
+    control_ids: &std::collections::HashSet<TokenIdType>,
+) -> Result<()> {
+    if let Some(id) = ids.iter().find(|id| control_ids.contains(id)) {
+        return Err(Error::msg(format!(
+            "ordinary segment encoded to control-token id {id}; this tokenizer cannot keep request text out of the control vocabulary"
+        )));
+    }
+    Ok(())
 }
 
 /// Represents the type of tokenizer being used
@@ -104,12 +127,15 @@ pub mod traits {
         /// tool, or attribute content from becoming structural when it happens
         /// to resemble a control token.
         ///
-        /// The Baseten backend preserves legacy tiktoken behavior by splitting
-        /// each segment into chunks of at most 400,000 characters and splitting
-        /// whitespace/non-whitespace runs at 25,000 characters. Independent
-        /// chunks are encoded through the Rayon thread pool, then concatenated
-        /// in input order. Tokenizer post-processing is applied once after all
-        /// segment IDs have been joined.
+        /// The Baseten and TikToken backends preserve legacy tiktoken behavior
+        /// by splitting each segment into chunks of at most 400,000 characters
+        /// and splitting whitespace/non-whitespace runs at 25,000 characters.
+        /// Baseten encodes independent chunks through the Rayon thread pool,
+        /// then concatenates them in input order, and applies tokenizer
+        /// post-processing once after all segment IDs have been joined.
+        /// TikToken classifies whitespace like the reference Kimi tokenizer
+        /// (Python's `str.isspace`), while Baseten uses `char::is_whitespace`;
+        /// the two differ only on runs of U+001C..U+001F.
         ///
         /// Backends must not implement this by flattening the segments first,
         /// because that discards the special-token trust boundary.
@@ -175,6 +201,16 @@ pub mod traits {
     /// (HuggingFace). `DecodeStream::step()` relies on `DecodeResult::Partial` to detect
     /// incomplete sequences and buffer tokens until the full character arrives.
     pub trait Decoder: Send + Sync {
+        /// Whether appending tokens can still reinterpret the decoded suffix.
+        /// Callers must buffer an unstable suffix until a boundary or end of input.
+        fn has_unstable_suffix(
+            &self,
+            _token_ids: &[TokenIdType],
+            _skip_special_tokens: bool,
+        ) -> bool {
+            false
+        }
+
         fn decode(
             &self,
             token_ids: &[TokenIdType],
@@ -189,6 +225,18 @@ pub mod traits {
         /// return an error explaining why the tokenizer is incompatible.
         fn validate_prefix_cache(&self) -> Result<()> {
             Err(Error::msg("tokenizer does not support prefix caching"))
+        }
+
+        /// Validate that a segment which allows special tokens encodes to the ids
+        /// [`Encoder::encode`] gives its text, so the prefix cache can serve it.
+        ///
+        /// Implementations opt in by returning `Ok(())`, as with
+        /// [`Self::validate_prefix_cache`]. A backend whose segmented encoding cuts
+        /// the text by position, like the tiktoken reference pieces, must not.
+        fn validate_segment_prefix_cache(&self) -> Result<()> {
+            Err(Error::msg(
+                "tokenizer does not support prefix caching within a segment",
+            ))
         }
 
         /// Apply construction-time [`TokenizerOptions`].
@@ -369,7 +417,9 @@ impl Tokenizer {
         )?))
     }
 
-    /// Create a stateful sequence object for decoding token_ids into text
+    /// Create a stateful sequence object for decoding token_ids into text.
+    /// Append the result of [`DecodeStream::finish`] when input ends; `step` may
+    /// retain a trailing byte-fallback run even when it currently forms valid UTF-8.
     pub fn decode_stream(
         &self,
         prompt_token_ids: &[TokenIdType],
@@ -405,9 +455,10 @@ where
 /// Create a tokenizer from a file path to a tokenizer file.
 /// The file extension is used to determine the tokenizer type.
 /// Supported file types are:
+/// - `tekken.json` / `tekken_*.json`: Mistral Tekken tokenizer
 /// - json: HuggingFace tokenizer
 /// - model, tiktoken: tiktoken BPE tokenizer (requires `config.json` with a supported
-///   `model_type` in the same directory; currently: kimi, kimi_k2, kimi_k25, kimi_k3)
+///   `model_type` in the same directory; currently: kimi, kimi_k2, kimi_k25, kimi_k3, kimi_k31)
 pub fn create_tokenizer_from_file(file_path: &str) -> Result<Arc<dyn traits::Tokenizer>> {
     create_tokenizer_from_file_with_options(file_path, Default::default())
 }
@@ -415,9 +466,10 @@ pub fn create_tokenizer_from_file(file_path: &str) -> Result<Arc<dyn traits::Tok
 /// Create a tokenizer from a file path to a tokenizer file with additional tokenizer option.
 /// The file extension is used to determine the tokenizer type.
 /// Supported file types are:
+/// - `tekken.json` / `tekken_*.json`: Mistral Tekken tokenizer
 /// - json: HuggingFace tokenizer
 /// - model, tiktoken: tiktoken BPE tokenizer (requires `config.json` with a supported
-///   `model_type` in the same directory; currently: kimi, kimi_k2, kimi_k25, kimi_k3)
+///   `model_type` in the same directory; currently: kimi, kimi_k2, kimi_k25, kimi_k3, kimi_k31)
 pub fn create_tokenizer_from_file_with_options(
     file_path: &str,
     options: TokenizerOptions,
@@ -425,6 +477,11 @@ pub fn create_tokenizer_from_file_with_options(
     use traits::Tokenizer as _;
 
     let path = Path::new(file_path);
+    if TekkenTokenizer::is_tekken_file(path) {
+        let tokenizer = TekkenTokenizer::from_file(file_path)?.with_options(options);
+        return Ok(Arc::new(tokenizer));
+    }
+
     let extension = path
         .extension()
         .and_then(std::ffi::OsStr::to_str)
@@ -489,14 +546,18 @@ impl DecodeStream {
         prompt_token_ids: &[TokenIdType],
         skip_special_tokens: bool,
     ) -> Self {
+        // Earlier prompt tokens are never read by incremental decoding. Keep the
+        // same context suffix and rebase its offsets before copying it.
+        let context_start = prompt_token_ids
+            .len()
+            .saturating_sub(INITIAL_INCREMENTAL_DETOKENIZATION_OFFSET);
+        let prompt_token_ids = prompt_token_ids[context_start..].to_vec();
         let num_input_tokens = prompt_token_ids.len();
-        let prompt_token_ids = prompt_token_ids.to_vec();
         Self {
             tokenizer,
             skip_special_tokens,
             all_token_ids: prompt_token_ids,
-            prefix_offset: num_input_tokens
-                .saturating_sub(INITIAL_INCREMENTAL_DETOKENIZATION_OFFSET),
+            prefix_offset: 0,
             read_offset: num_input_tokens,
             has_emitted: false,
         }
@@ -517,6 +578,27 @@ impl DecodeStream {
     pub fn step(&mut self, id: u32) -> Result<Option<String>> {
         self.all_token_ids.push(id);
 
+        if self.tokenizer.has_unstable_suffix(
+            &self.all_token_ids[self.read_offset..],
+            self.skip_special_tokens,
+        ) {
+            return Ok(None);
+        }
+        self.decode_pending(false)
+    }
+
+    /// Decode the remaining suffix once no further tokens can reinterpret it.
+    /// Call this at end-of-input and append its output after all `step` chunks.
+    /// Dropping the stream without finishing discards any buffered text.
+    pub fn finish(&mut self) -> Result<Option<String>> {
+        self.decode_pending(true)
+    }
+
+    fn decode_pending(&mut self, finishing: bool) -> Result<Option<String>> {
+        if self.read_offset == self.all_token_ids.len() {
+            return Ok(None);
+        }
+
         let prefix_text: String = self
             .tokenizer
             .decode(
@@ -531,7 +613,7 @@ impl DecodeStream {
         )?;
 
         let new_text = new_result.as_str();
-        let is_partial = new_result.is_partial();
+        let is_partial = new_result.is_partial() && !finishing;
 
         // Once generated text has been returned, decoding must remain append-only.
         // A complete rewrite cannot be repaired after the caller has seen the old text.
@@ -604,6 +686,52 @@ mod decode_stream_unicode_tests {
     }
 
     impl super::traits::Tokenizer for RewritingTokenizer {}
+
+    #[test]
+    fn prompt_suffix_preserves_decode_inputs_and_output() {
+        let tokenizer: Arc<dyn super::traits::Tokenizer> = Arc::new(
+            super::HuggingFaceTokenizer::from_file(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/data/minimal-bpe/tokenizer.json"
+            ))
+            .unwrap(),
+        );
+        for prompt_len in [0usize, 1, 4, 5, 6, 775_168] {
+            let prompt: Vec<_> = (0..prompt_len)
+                .map(|index| 1 + (index % 22) as u32)
+                .collect();
+            for skip_special_tokens in [false, true] {
+                let mut stream = DecodeStream::new(tokenizer.clone(), &prompt, skip_special_tokens);
+                // Reconstruct the previous full-prompt state as a parity oracle.
+                let mut full = DecodeStream {
+                    tokenizer: tokenizer.clone(),
+                    skip_special_tokens,
+                    all_token_ids: prompt.clone(),
+                    prefix_offset: prompt_len
+                        .saturating_sub(super::INITIAL_INCREMENTAL_DETOKENIZATION_OFFSET),
+                    read_offset: prompt_len,
+                    has_emitted: false,
+                };
+                assert!(stream.all_token_ids.capacity() <= 5);
+                for token in [5, 9, 12, 12, 13, 0, 1, 17, 13, 14, 12, 8, 2] {
+                    assert_eq!(
+                        &stream.all_token_ids[stream.prefix_offset..stream.read_offset],
+                        &full.all_token_ids[full.prefix_offset..full.read_offset],
+                    );
+                    assert_eq!(
+                        &stream.all_token_ids[stream.prefix_offset..],
+                        &full.all_token_ids[full.prefix_offset..],
+                    );
+                    let actual = stream.step(token).map_err(|error| error.to_string());
+                    let expected = full.step(token).map_err(|error| error.to_string());
+                    assert_eq!(actual, expected, "prompt length {prompt_len}");
+                    if actual.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn allows_boundary_recovery_before_generated_text_is_emitted() {
