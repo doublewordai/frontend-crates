@@ -6,16 +6,54 @@
 //! This module preserves the existing hybrid behavior: `fastokens` handles encoding and
 //! `HuggingFaceTokenizer` handles decoding. Both are loaded from the same `tokenizer.json`
 //! file.
+//!
+//! [`FastTikTokenTokenizer`] instead loads a bare `tiktoken.model` and decodes its ranks
+//! directly.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 
 use super::{
     EncodeSegment, Encoding, Error, Result, TokenIdType,
     hf::HuggingFaceTokenizer,
+    tiktoken,
     traits::{DecodeResult, Decoder, Encoder, Tokenizer},
 };
+
+fn fast_encode(encoder: &fastokens::Tokenizer, input: &str) -> Result<Encoding> {
+    let ids = encoder
+        .encode(input)
+        .map_err(|e| Error::msg(format!("Fastokens encode error: {e}")))?;
+    Ok(Encoding::Sp(ids))
+}
+
+fn fast_encode_segments(
+    encoder: &fastokens::Tokenizer,
+    segments: &[EncodeSegment<'_>],
+    control_ids: &HashSet<u32>,
+) -> Result<Encoding> {
+    // Each segment is encoded once and its ids joined, which is what
+    // `fastokens` does itself: neither tokenizer here keeps the truncation or
+    // padding that would apply to the joined ids.
+    let mut ids = Vec::new();
+    for segment in segments {
+        let start = ids.len();
+        let segment_ids: Vec<u32> = encoder
+            .encode_segments_unpadded(&[fastokens::EncodeSegment {
+                text: segment.text,
+                allow_special: segment.allow_special,
+            }])
+            .map_err(|e| Error::msg(format!("Fastokens segmented encode error: {e}")))?;
+        ids.extend(segment_ids);
+        if !segment.allow_special {
+            crate::reject_control_ids_in_ordinary_segment(&ids[start..], control_ids)?;
+        }
+    }
+    Ok(Encoding::Sp(ids))
+}
 
 /// Hybrid tokenizer: fast BPE encoding via `fastokens`, decoding via HuggingFace.
 ///
@@ -26,9 +64,15 @@ pub struct FastTokenizer {
 }
 
 impl FastTokenizer {
+    /// Load `tokenizer.json`, ignoring its `truncation` and `padding` blocks as Python
+    /// `transformers` does unless a call asks for them. `fastokens` would apply both on
+    /// every encode, and [`CachedTokenizer`](crate::CachedTokenizer) would then apply
+    /// them to each separately encoded piece instead of the whole input.
     pub fn from_file(path: &str) -> Result<Self> {
-        let fast_encoder = fastokens::Tokenizer::from_file(Path::new(path))
+        let mut fast_encoder = fastokens::Tokenizer::from_file(Path::new(path))
             .map_err(|e| Error::msg(format!("Error loading fastokens tokenizer: {e}")))?;
+        fast_encoder.set_truncation(None);
+        fast_encoder.set_padding(None);
         let hf_decoder = HuggingFaceTokenizer::from_file(path)?;
         Ok(Self {
             fast_encoder,
@@ -39,11 +83,7 @@ impl FastTokenizer {
 
 impl Encoder for FastTokenizer {
     fn encode(&self, input: &str) -> Result<Encoding> {
-        let ids = self
-            .fast_encoder
-            .encode(input)
-            .map_err(|e| Error::msg(format!("Fastokens encode error: {e}")))?;
-        Ok(Encoding::Sp(ids))
+        fast_encode(&self.fast_encoder, input)
     }
 
     fn encode_batch(&self, inputs: &[&str]) -> Result<Vec<Encoding>> {
@@ -51,22 +91,16 @@ impl Encoder for FastTokenizer {
     }
 
     fn encode_segments(&self, segments: &[EncodeSegment<'_>]) -> Result<Encoding> {
-        let segments: Vec<fastokens::EncodeSegment<'_>> = segments
-            .iter()
-            .map(|segment| fastokens::EncodeSegment {
-                text: segment.text,
-                allow_special: segment.allow_special,
-            })
-            .collect();
-        let ids = self
-            .fast_encoder
-            .encode_segments(&segments)
-            .map_err(|e| Error::msg(format!("Fastokens segmented encode error: {e}")))?;
-        Ok(Encoding::Sp(ids))
+        fast_encode_segments(&self.fast_encoder, segments, self.hf_decoder.added_ids())
     }
 }
 
 impl Decoder for FastTokenizer {
+    fn has_unstable_suffix(&self, token_ids: &[TokenIdType], skip_special_tokens: bool) -> bool {
+        self.hf_decoder
+            .has_unstable_suffix(token_ids, skip_special_tokens)
+    }
+
     fn decode(&self, token_ids: &[TokenIdType], skip_special_tokens: bool) -> Result<DecodeResult> {
         self.hf_decoder.decode(token_ids, skip_special_tokens)
     }
@@ -74,6 +108,12 @@ impl Decoder for FastTokenizer {
 
 impl Tokenizer for FastTokenizer {
     fn validate_prefix_cache(&self) -> Result<()> {
+        Ok(())
+    }
+
+    // `fastokens` runs one pipeline for `encode` and for a segment that allows
+    // special tokens.
+    fn validate_segment_prefix_cache(&self) -> Result<()> {
         Ok(())
     }
 
@@ -96,6 +136,134 @@ impl Tokenizer for FastTokenizer {
     }
 }
 
+/// `fastokens` over a bare `tiktoken.model`, for checkpoints such as Kimi K2/K3 that ship no
+/// `tokenizer.json`. Loads the same ranks, regex, and special tokens as
+/// [`TikTokenTokenizer::from_file_auto`](crate::TikTokenTokenizer::from_file_auto).
+///
+/// Plain-text prefix caching ([`CachedTokenizer`](crate::CachedTokenizer)) is rejected for
+/// this backend pending validation of the full cache matrix. In fastokens 0.3.4, the
+/// known Unicode contraction case is consistent across a special-token boundary, but
+/// still differs from tiktoken-rs. Segmented encodes are unaffected by the cache gate:
+/// every segment is encoded on its own with or without a cache.
+pub struct FastTikTokenTokenizer {
+    inner: fastokens::Tokenizer,
+    /// Decoding joins raw bytes itself because `fastokens`' decoder returns a lossy `String`,
+    /// which cannot tell a vocabulary token ending in `EF BF BD` from a truncated sequence.
+    id_to_bytes: FxHashMap<u32, Vec<u8>>,
+    special_token_ids: HashSet<u32>,
+    special_tokens: Vec<String>,
+    /// Every added-token id, `special: true` or not; see
+    /// [`crate::reject_control_ids_in_ordinary_segment`].
+    added_ids: HashSet<u32>,
+}
+
+impl FastTikTokenTokenizer {
+    /// Load a tiktoken model file, reading the BPE pattern from `config.json` and the special
+    /// tokens from `tokenizer_config.json` in the same directory.
+    pub fn from_file_auto(path: &str) -> Result<Self> {
+        let directory = Path::new(path)
+            .parent()
+            .ok_or_else(|| Error::msg("Cannot determine parent directory of tiktoken file"))?;
+        let pattern = tiktoken::detect_bpe_pattern(directory)?;
+        let encoder = tiktoken::parse_tiktoken_file(path)?;
+        let num_base_tokens = encoder.values().max().map_or(0, |&m| m + 1) as usize;
+        let tiktoken::AddedTokens { tokens, skip_ids } =
+            tiktoken::load_added_tokens(directory, num_base_tokens)?;
+
+        let ranks: Vec<(Vec<u8>, u32)> = encoder.into_iter().collect();
+        let mut id_to_bytes: FxHashMap<u32, Vec<u8>> = ranks
+            .iter()
+            .map(|(bytes, rank)| (*rank, bytes.clone()))
+            .collect();
+        id_to_bytes.extend(
+            tokens
+                .iter()
+                .map(|(content, &id)| (id, content.as_bytes().to_vec())),
+        );
+        let special_token_strings = tiktoken::sorted_special_token_strings(&tokens);
+        let added_ids = tokens.values().copied().collect();
+
+        let config =
+            fastokens::tiktoken::TiktokenConfig::new(pattern, tokens.into_iter().collect());
+        let inner = fastokens::Tokenizer::from_tiktoken_ranks(&ranks, config).map_err(|e| {
+            Error::msg(format!(
+                "Error loading fastokens tiktoken tokenizer from {path}: {e}"
+            ))
+        })?;
+        Ok(Self {
+            inner,
+            id_to_bytes,
+            special_token_ids: skip_ids,
+            special_tokens: special_token_strings,
+            added_ids,
+        })
+    }
+
+    /// Atomic special-token strings registered with the encoder, sorted; the boundary set
+    /// for [`CachedTokenizer`](crate::CachedTokenizer). Includes added tokens marked
+    /// `"special": false`, unlike `special_token_ids`.
+    pub fn special_tokens(&self) -> &[String] {
+        &self.special_tokens
+    }
+}
+
+impl Encoder for FastTikTokenTokenizer {
+    fn encode(&self, input: &str) -> Result<Encoding> {
+        fast_encode(&self.inner, input)
+    }
+
+    fn encode_batch(&self, inputs: &[&str]) -> Result<Vec<Encoding>> {
+        inputs.par_iter().map(|input| self.encode(input)).collect()
+    }
+
+    fn encode_segments(&self, segments: &[EncodeSegment<'_>]) -> Result<Encoding> {
+        fast_encode_segments(&self.inner, segments, &self.added_ids)
+    }
+}
+
+impl Decoder for FastTikTokenTokenizer {
+    fn decode(&self, token_ids: &[TokenIdType], skip_special_tokens: bool) -> Result<DecodeResult> {
+        let mut bytes = Vec::new();
+        for id in token_ids {
+            if skip_special_tokens && self.special_token_ids.contains(id) {
+                continue;
+            }
+            if let Some(token) = self.id_to_bytes.get(id) {
+                bytes.extend_from_slice(token);
+            }
+        }
+        match String::from_utf8(bytes) {
+            Ok(text) => Ok(DecodeResult::Complete(text)),
+            Err(e) => Ok(DecodeResult::from_decoded(
+                String::from_utf8_lossy(e.as_bytes()).into_owned(),
+            )),
+        }
+    }
+}
+
+impl Tokenizer for FastTikTokenTokenizer {
+    fn validate_prefix_cache(&self) -> Result<()> {
+        Err(Error::msg(
+            "fastokens over tiktoken.model plain-text prefix caching is disabled pending \
+             validation of the full cache matrix",
+        ))
+    }
+
+    fn token_to_id(&self, token: &str) -> Result<Option<TokenIdType>> {
+        Ok(self.inner.token_to_id(token))
+    }
+
+    fn special_token_ids(&self) -> Result<Vec<TokenIdType>> {
+        let mut ids: Vec<TokenIdType> = self.special_token_ids.iter().copied().collect();
+        ids.sort_unstable();
+        Ok(ids)
+    }
+
+    fn num_special_tokens_added(&self) -> Result<usize> {
+        Ok(0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +279,30 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/data/sample-models/TinyLlama_v1.1/tokenizer.json"
     );
+
+    #[test]
+    fn byte_fallback_stream_matches_full_decode() {
+        let tokenizer: crate::Tokenizer =
+            std::sync::Arc::new(FastTokenizer::from_file(SEGMENTED_TOKENIZER_PATH).unwrap()).into();
+        for (pieces, skip) in [
+            (vec!["<0x61>", "<0xF5>"], false),
+            (vec!["<0x61>", "</s>", "<0xF5>"], false),
+            (vec!["<0x61>", "</s>", "<0xF5>"], true),
+        ] {
+            let ids: Vec<_> = pieces
+                .iter()
+                .map(|piece| tokenizer.token_to_id(piece).unwrap().unwrap())
+                .collect();
+            let expected: String = tokenizer.decode(&ids, skip).unwrap().into();
+            let mut stream = tokenizer.decode_stream(&[], skip);
+            let mut actual = String::new();
+            for id in ids {
+                actual.push_str(&stream.step(id).unwrap().unwrap_or_default());
+            }
+            actual.push_str(&stream.finish().unwrap().unwrap_or_default());
+            assert_eq!(actual, expected, "{pieces:?}, skip={skip}");
+        }
+    }
 
     #[test]
     fn test_fast_encode_decode_roundtrip() {
@@ -213,6 +405,74 @@ mod tests {
     }
 
     #[test]
+    fn test_fast_segmented_encoding_rejects_ordinary_control_ids() {
+        // `H`+`e` merges to id 18, declared here as the added token `He`:
+        // ordinary text must not come back as that control id.
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("tokenizer.json");
+        let mut json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(TOKENIZER_PATH).unwrap()).unwrap();
+        json["added_tokens"] = serde_json::json!([{
+            "id": 18,
+            "content": "He",
+            "single_word": false,
+            "lstrip": false,
+            "rstrip": false,
+            "normalized": false,
+            "special": true
+        }]);
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        let tokenizer = FastTokenizer::from_file(path.to_str().unwrap()).unwrap();
+        let control = tokenizer
+            .encode_segments(&[EncodeSegment::control("He")])
+            .unwrap();
+        assert_eq!(control.token_ids(), &[18]);
+        let error = tokenizer
+            .encode_segments(&[EncodeSegment::ordinary("He")])
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("control-token id 18"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn tokenizer_json_truncation_and_padding_are_ignored() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("tokenizer.json");
+        let mut json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(SEGMENTED_TOKENIZER_PATH).unwrap())
+                .unwrap();
+        // Both reference encodings are longer than 12 ids, so each block alone changes them.
+        json["truncation"] = serde_json::json!({
+            "direction": "Right", "max_length": 12, "strategy": "LongestFirst", "stride": 0
+        });
+        json["padding"] = serde_json::json!({
+            "strategy": {"Fixed": 512}, "direction": "Right", "pad_to_multiple_of": null,
+            "pad_id": 0, "pad_type_id": 0, "pad_token": "<unk>"
+        });
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        let reference = FastTokenizer::from_file(SEGMENTED_TOKENIZER_PATH).unwrap();
+        let tokenizer = FastTokenizer::from_file(path.to_str().unwrap()).unwrap();
+        let user = "hello world ".repeat(16);
+        let segments = [
+            EncodeSegment::control("<s>"),
+            EncodeSegment::ordinary(&user),
+            EncodeSegment::control("</s>"),
+        ];
+        assert_eq!(
+            tokenizer.encode(&user).unwrap().token_ids(),
+            reference.encode(&user).unwrap().token_ids()
+        );
+        assert_eq!(
+            tokenizer.encode_segments(&segments).unwrap().token_ids(),
+            reference.encode_segments(&segments).unwrap().token_ids()
+        );
+    }
+
+    #[test]
     fn test_fast_with_decode_stream() {
         use crate::Tokenizer as TokenizerWrapper;
         use std::sync::Arc;
@@ -294,5 +554,216 @@ mod tests {
                 "the HF post-processor must add the BOS token FastTokenizer omits"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tiktoken_parity_tests {
+    use super::*;
+    use crate::TikTokenTokenizer;
+
+    const TIKTOKEN_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/data/sample-models/mock-tiktoken-bpe/tiktoken.model"
+    );
+    /// All 256 byte tokens plus the merges ` I` and ` I'`, with the Kimi pattern: the
+    /// smallest vocabulary that exposes fastokens' Unicode contraction mismatch with tiktoken-rs.
+    const CONTRACTION_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/data/sample-models/mock-tiktoken-contraction/tiktoken.model"
+    );
+
+    fn pair() -> (TikTokenTokenizer, FastTikTokenTokenizer) {
+        let reference = TikTokenTokenizer::from_file_auto(TIKTOKEN_PATH).unwrap();
+        let fast = FastTikTokenTokenizer::from_file_auto(TIKTOKEN_PATH).unwrap();
+        (reference, fast)
+    }
+
+    fn corpus() -> Vec<String> {
+        vec![
+            String::new(),
+            "hello world".into(),
+            "Hello, World! 123 4567 89".into(),
+            "  leading and trailing  ".into(),
+            "tabs\tand\nnewlines\r\nmixed   spacing".into(),
+            "<|im_start|>user\nhi there<|im_end|><|im_start|>assistant\n".into(),
+            "a literal <|im_start|> inside plain text".into(),
+            "emoji 😀🚀 and café naïve Zürich".into(),
+            "北京 東京 mixed 中英文 text ソフトウェア".into(),
+            "Москва मुंबई العربية".into(),
+            "fn main() { println!(\"{}\", 42); } // code-ish ~!@#$%^&*()".into(),
+            "x".repeat(5000),
+            " ".repeat(300) + "after long whitespace",
+            "word ".repeat(400),
+        ]
+    }
+
+    #[test]
+    fn special_token_tables_match_tiktoken_rs() {
+        let (reference, fast) = pair();
+        assert_eq!(fast.special_tokens(), reference.special_tokens());
+        assert_eq!(
+            fast.special_token_ids().unwrap(),
+            reference.special_token_ids().unwrap()
+        );
+        assert_eq!(fast.token_to_id("<|im_end|>").unwrap(), Some(474));
+    }
+
+    #[test]
+    fn non_special_added_tokens_survive_skip_special_tokens() {
+        let source = Path::new(TIKTOKEN_PATH).parent().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        for file in ["tiktoken.model", "config.json"] {
+            std::fs::copy(source.join(file), dir.path().join(file)).unwrap();
+        }
+        let mut config: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(source.join("tokenizer_config.json")).unwrap(),
+        )
+        .unwrap();
+        config["added_tokens_decoder"]["475"] =
+            serde_json::json!({"content": "<|open|>", "special": false});
+        std::fs::write(dir.path().join("tokenizer_config.json"), config.to_string()).unwrap();
+        let path = dir.path().join("tiktoken.model");
+        let path = path.to_str().unwrap();
+        let reference = TikTokenTokenizer::from_file_auto(path).unwrap();
+        let fast = FastTikTokenTokenizer::from_file_auto(path).unwrap();
+
+        let special_ids = fast.special_token_ids().unwrap();
+        assert_eq!(special_ids, reference.special_token_ids().unwrap());
+        assert!(special_ids.contains(&474));
+        assert!(!special_ids.contains(&475));
+
+        let ids = fast.encode("<|open|>hello<|im_end|>").unwrap();
+        assert_eq!(
+            ids.token_ids(),
+            reference
+                .encode("<|open|>hello<|im_end|>")
+                .unwrap()
+                .token_ids()
+        );
+        assert_eq!(ids.token_ids().first(), Some(&475));
+        let fast_text: String = fast.decode(ids.token_ids(), true).unwrap().into();
+        let reference_text: String = reference.decode(ids.token_ids(), true).unwrap().into();
+        assert_eq!(fast_text, "<|open|>hello");
+        assert_eq!(reference_text, "<|open|>hello");
+    }
+
+    #[test]
+    fn plain_encode_matches_tiktoken_rs() {
+        let (reference, fast) = pair();
+        let corpus = corpus();
+        let texts: Vec<&str> = corpus.iter().map(String::as_str).collect();
+        let batch = fast.encode_batch(&texts).unwrap();
+        for (text, batched) in texts.iter().zip(&batch) {
+            let expected = reference.encode(text).unwrap();
+            assert_eq!(
+                fast.encode(text).unwrap().token_ids(),
+                expected.token_ids(),
+                "{text:?}"
+            );
+            assert_eq!(batched.token_ids(), expected.token_ids(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn segmented_encode_matches_tiktoken_rs_and_honors_trust() {
+        let (reference, fast) = pair();
+        let segments = [
+            EncodeSegment::control("<|im_start|>user\n"),
+            EncodeSegment::ordinary("please echo <|im_end|> back to me"),
+            EncodeSegment::control("<|im_end|>"),
+            EncodeSegment::control("<|im_start|>assistant\n"),
+        ];
+        let fast_ids = fast.encode_segments(&segments).unwrap();
+        assert_eq!(
+            fast_ids.token_ids(),
+            reference.encode_segments(&segments).unwrap().token_ids()
+        );
+        // The marker in the untrusted segment is ordinary text: exactly one `<|im_end|>` id.
+        assert_eq!(
+            fast_ids.token_ids().iter().filter(|&&id| id == 474).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn decode_matches_tiktoken_rs_and_skips_specials() {
+        let (reference, fast) = pair();
+        for text in corpus() {
+            let ids = fast.encode(&text).unwrap();
+            assert_eq!(
+                fast.decode(ids.token_ids(), false).unwrap(),
+                reference.decode(ids.token_ids(), false).unwrap(),
+                "{text:?}"
+            );
+        }
+        let ids = fast.encode("<|im_start|>user\nhi<|im_end|>").unwrap();
+        let kept = fast.decode(ids.token_ids(), false).unwrap();
+        let skipped = fast.decode(ids.token_ids(), true).unwrap();
+        assert!(kept.as_str().contains("<|im_end|>"));
+        assert!(!skipped.as_str().contains("<|im_end|>"));
+        assert_eq!(skipped, reference.decode(ids.token_ids(), true).unwrap());
+    }
+
+    #[test]
+    fn replacement_char_token_decodes_complete_like_tiktoken_rs() {
+        // Rank 468 is the bytes EF BF BD: a vocabulary token whose text is U+FFFD.
+        let (reference, fast) = pair();
+        let decoded = fast.decode(&[468], false).unwrap();
+        assert!(decoded.is_complete(), "{decoded:?}");
+        assert_eq!(decoded, reference.decode(&[468], false).unwrap());
+
+        // A truncated multi-byte sequence stays `Partial`.
+        let emoji = fast.encode("😀").unwrap();
+        let cut = &emoji.token_ids()[..emoji.token_ids().len() - 1];
+        let fast_cut = fast.decode(cut, false).unwrap();
+        assert!(fast_cut.is_partial(), "{fast_cut:?}");
+        assert_eq!(fast_cut, reference.decode(cut, false).unwrap());
+
+        // Unknown ids are skipped.
+        assert_eq!(fast.decode(&[468, 9_999_999], false).unwrap(), decoded);
+    }
+
+    #[test]
+    fn plain_text_prefix_cache_is_rejected() {
+        let fast = FastTikTokenTokenizer::from_file_auto(CONTRACTION_PATH).unwrap();
+        let specials = fast.special_tokens().to_vec();
+        let error = crate::CachedTokenizer::new(std::sync::Arc::new(fast), specials, 1 << 20)
+            .err()
+            .expect("fastokens over tiktoken.model must not be prefix-cached")
+            .to_string();
+        assert!(error.contains("fastokens"), "{error}");
+    }
+
+    /// Fastokens 0.3.4 is consistent across this special-token boundary, but still
+    /// differs from tiktoken-rs on the Unicode case folding of `(?i:'s)` (`'ſ`).
+    /// This single case does not establish the full plain-text prefix-cache contract.
+    #[test]
+    fn unicode_contraction_is_consistent_across_special_token_boundary() {
+        let reference = TikTokenTokenizer::from_file_auto(CONTRACTION_PATH).unwrap();
+        let fast = FastTikTokenTokenizer::from_file_auto(CONTRACTION_PATH).unwrap();
+        let special = "<|end_of_msg|>";
+        let suffix = " I'\u{17f}";
+        let full = format!("{special}{suffix}");
+
+        let ref_full = reference.encode(&full).unwrap().token_ids().to_vec();
+        let ref_suffix = reference.encode(suffix).unwrap().token_ids().to_vec();
+        assert_eq!(
+            ref_full[1..],
+            ref_suffix[..],
+            "tiktoken-rs must be self-consistent"
+        );
+
+        let fast_full = fast.encode(&full).unwrap().token_ids().to_vec();
+        let fast_suffix = fast.encode(suffix).unwrap().token_ids().to_vec();
+        assert_ne!(
+            fast_full, ref_full,
+            "revisit the known Unicode contraction mismatch"
+        );
+        assert_eq!(
+            fast_full[1..],
+            fast_suffix[..],
+            "splitting at this special-token boundary must preserve fastokens ids"
+        );
     }
 }

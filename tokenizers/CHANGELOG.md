@@ -4,6 +4,89 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [4.3.1](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-tokenizers-v4.3.0...dynamo-tokenizers-v4.3.1) - 2026-11-12
+
+### Bug fixes
+
+- *(renderer)* Encode control-token spellings in request text ([#545](https://github.com/ai-dynamo/frontend-crates/pull/545))
+
+## [4.3.0](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-tokenizers-v4.2.0...dynamo-tokenizers-v4.3.0) - 2026-11-12
+
+### Features
+
+- Add Kimi K3.1 Pro support ([#575](https://github.com/ai-dynamo/frontend-crates/pull/575))
+
+## [4.2.0](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-tokenizers-v4.1.2...dynamo-tokenizers-v4.2.0) - 2026-11-10
+
+### Features
+
+- *(parsers-v2)* Add Mistral tekken tokenizer, native renderer and mistral_4 UnifiedParser
+
+## [4.1.2](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-tokenizers-v4.1.1...dynamo-tokenizers-v4.1.2) - 2026-11-09
+
+### Bug fixes
+
+- *(tokenizers)* Strip tokenizer.json truncation and padding from fastokens ([#571](https://github.com/ai-dynamo/frontend-crates/pull/571))
+
+## [4.1.1](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-tokenizers-v4.1.0...dynamo-tokenizers-v4.1.1) - 2026-10-30
+
+### Bug fixes
+
+- *(tokenizers)* Split long runs in tiktoken segment encodes like the Kimi reference ([#500](https://github.com/ai-dynamo/frontend-crates/pull/500))
+
+## [4.1.0](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-tokenizers-v4.0.0...dynamo-tokenizers-v4.1.0) - 2026-10-30
+
+### Features
+
+- *(tokenizers)* Cache segmented encodes per segment ([#499](https://github.com/ai-dynamo/frontend-crates/pull/499))
+
+## [3.1.3](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-tokenizers-v3.1.2...dynamo-tokenizers-v3.1.3) - 2026-10-25
+
+### Bug fixes
+
+- *(tokenizers)* Keep "special": false added tokens when skipping special tokens ([#475](https://github.com/ai-dynamo/frontend-crates/pull/475))
+
+## [3.1.1](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-tokenizers-v3.1.0...dynamo-tokenizers-v3.1.1) - 2026-10-15
+
+### Bug fixes
+
+- *(tokenizers)* Require fastokens 0.3.4 ([#382](https://github.com/ai-dynamo/frontend-crates/pull/382))
+
+## [3.1.0](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-tokenizers-v3.0.0...dynamo-tokenizers-v3.1.0) - 2026-10-06
+
+### Features
+
+- *(tokenizers)* Encode bare tiktoken.model checkpoints through fastokens ([#294](https://github.com/ai-dynamo/frontend-crates/pull/294))
+
+## [3.0.0] - 2026-10-02
+
+### Breaking changes
+
+- Call `DecodeStream::finish()` when token input ends and append its returned text.
+  `step()` now buffers trailing byte-fallback runs, including valid UTF-8, until
+  a non-byte boundary or `finish()` so later bytes cannot rewrite emitted text.
+  Step-only callers can otherwise lose terminal text. Consecutive byte-fallback
+  output, including some emoji and rare CJK sequences, may remain buffered for
+  the entire response; this preserves full-decoding parity.
+
+## [2.0.0](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-tokenizers-v1.9.2...dynamo-tokenizers-v2.0.0) - 2026-10-01
+
+### Features
+
+- *(tokenizers)* [**breaking**] Share prefix cache capacity across namespaces ([#298](https://github.com/ai-dynamo/frontend-crates/pull/298))
+
+## [1.9.2](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-tokenizers-v1.9.1...dynamo-tokenizers-v1.9.2) - 2026-09-29
+
+### Performance
+
+- *(tokenizers)* Retain only prompt context in decode streams ([#281](https://github.com/ai-dynamo/frontend-crates/pull/281))
+
+## [1.9.1](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-tokenizers-v1.9.0...dynamo-tokenizers-v1.9.1) - 2026-09-22
+
+### Performance
+
+- *(tokenizers)* Reuse prefix hashes on cache hits and misses ([#244](https://github.com/ai-dynamo/frontend-crates/pull/244))
+
 ## [1.9.0](https://github.com/ai-dynamo/frontend-crates/compare/dynamo-tokenizers-v1.8.2...dynamo-tokenizers-v1.9.0) - 2026-09-22
 
 ### Features
