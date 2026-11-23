@@ -58,6 +58,10 @@ pub struct Gemma4ReasoningParser {
     /// whether the accumulated bytes are still a strict prefix of
     /// `thought\n` (case 2) or have diverged (case 3).
     reasoning_accum: String,
+    /// Set by `set_in_reasoning(true)` until the completion's first bytes are
+    /// seen. If the completion opens the channel itself, the caller's seed was
+    /// wrong and that opener is consumed as a normal start.
+    seeded_open: bool,
 }
 
 impl Gemma4ReasoningParser {
@@ -67,6 +71,7 @@ impl Gemma4ReasoningParser {
             in_reasoning: false,
             prefix_resolved: false,
             reasoning_accum: String::new(),
+            seeded_open: false,
         }
     }
 
@@ -135,7 +140,31 @@ fn resolve_prefix<'a>(accum: &'a str, raw_reasoning: &'a str) -> (&'a str, bool)
 }
 
 impl ReasoningParser for Gemma4ReasoningParser {
+    fn set_in_reasoning(&mut self, in_reasoning: bool) {
+        // The chat template already opened the thought channel, `thought\n`
+        // label included (Gemma 4 does this after a tool response when
+        // thinking is on), so the completion starts mid-reasoning with no
+        // start marker and no label to strip.
+        self.in_reasoning = in_reasoning;
+        self.prefix_resolved = in_reasoning;
+        self.reasoning_accum.clear();
+        self.seeded_open = in_reasoning;
+    }
+
     fn detect_and_parse_reasoning(&mut self, text: &str, _token_ids: &[u32]) -> ParserResult {
+        if self.seeded_open {
+            // Seed the opener the prompt consumed, then parse as usual: the
+            // text up to `<channel|>` (or all of it, if truncated) is reasoning.
+            // A completion that opens the channel itself is parsed as is.
+            // This parser matches on text, so token ids are not needed.
+            self.seeded_open = false;
+            self.reset_span();
+            if !text.starts_with(START_TOKEN) {
+                let seeded = format!("{START_TOKEN}{THOUGHT_PREFIX}{text}");
+                return self.detect_and_parse_reasoning(&seeded, &[]);
+            }
+        }
+
         // Non-streaming path: we have the complete text, so we can use plain
         // string operations.
         if !text.contains(START_TOKEN) {
@@ -216,6 +245,22 @@ impl ReasoningParser for Gemma4ReasoningParser {
         // Aggregate this delta with the carry buffer for prefix detection.
         let mut work = std::mem::take(&mut self.buffer);
         work.push_str(text);
+
+        if self.seeded_open {
+            if work.len() < START_TOKEN.len() && START_TOKEN.starts_with(work.as_str()) {
+                // Could still be the completion's own opener; wait for more.
+                self.buffer = work;
+                return ParserResult::default();
+            }
+            self.seeded_open = false;
+            if let Some(rest) = work.strip_prefix(START_TOKEN) {
+                // The completion opened the channel itself, so the seed was
+                // wrong: consume this opener as a normal start.
+                work = rest.to_string();
+                self.prefix_resolved = false;
+                self.reasoning_accum.clear();
+            }
+        }
 
         let mut normal = String::new();
         let mut reasoning_emit = String::new();
@@ -551,6 +596,107 @@ mod tests {
             r.normal_text, r#"<|tool_call>call:get_weather{location:<|"|>Tokyo<|"|>}<tool_call|>"#,
             "tool-call markers must survive reasoning extraction",
         );
+    }
+
+    // ----- Prompt-injected opener -----
+    //
+    // After a tool response with thinking on, Gemma 4's template ends the
+    // prompt with `<|channel>thought\n`, so the completion is
+    // `reasoning<channel|>answer` with no start marker. The caller seeds the
+    // state with `set_in_reasoning(true)`.
+
+    #[test]
+    fn streaming_prompt_injected_opener_splits_reasoning() {
+        let mut p = Gemma4ReasoningParser::new();
+        p.set_in_reasoning(true);
+        let chunks = [
+            "The user wants to know who owns the project.",
+            "\nThe file says \"Owner: team Heron.\"<chan",
+            "nel|>The project is owned by team Heron.",
+        ];
+        let (mut reasoning, mut normal) = (String::new(), String::new());
+        for c in chunks {
+            let r = p.parse_reasoning_streaming_incremental(c, &[]);
+            reasoning.push_str(&r.reasoning_text);
+            normal.push_str(&r.normal_text);
+        }
+        let r = p.finish_reasoning_stream();
+        reasoning.push_str(&r.reasoning_text);
+        normal.push_str(&r.normal_text);
+        assert_eq!(
+            reasoning,
+            "The user wants to know who owns the project.\nThe file says \"Owner: team Heron.\""
+        );
+        assert_eq!(normal, "The project is owned by team Heron.");
+    }
+
+    #[test]
+    fn streaming_prompt_injected_opener_keeps_leading_t() {
+        // With the label already in the prompt, reasoning that starts with
+        // `t` (a prefix of `thought\n`) must not be held back or dropped.
+        let mut p = Gemma4ReasoningParser::new();
+        p.set_in_reasoning(true);
+        let r = p.parse_reasoning_streaming_incremental("th", &[]);
+        assert_eq!(r.reasoning_text, "th");
+        let r = p.parse_reasoning_streaming_incremental("e file<channel|>ok", &[]);
+        assert_eq!(r.reasoning_text, "e file");
+        assert_eq!(r.normal_text, "ok");
+    }
+
+    #[test]
+    fn non_streaming_prompt_injected_opener_splits_reasoning() {
+        let mut p = Gemma4ReasoningParser::new();
+        p.set_in_reasoning(true);
+        let r = p.detect_and_parse_reasoning("thinking<channel|>answer", &[]);
+        assert_eq!(r.reasoning_text, "thinking");
+        assert_eq!(r.normal_text, "answer");
+    }
+
+    #[test]
+    fn non_streaming_prompt_injected_opener_truncated_is_all_reasoning() {
+        let mut p = Gemma4ReasoningParser::new();
+        p.set_in_reasoning(true);
+        let r = p.detect_and_parse_reasoning("thinking that never closes", &[]);
+        assert_eq!(r.reasoning_text, "thinking that never closes");
+        assert_eq!(r.normal_text, "");
+    }
+
+    #[test]
+    fn seeded_but_completion_opens_channel_itself_streaming() {
+        // A caller that seeds without checking the prompt (e.g. the Anthropic
+        // path) must not leak the completion's own opener into reasoning.
+        let mut p = Gemma4ReasoningParser::new();
+        p.set_in_reasoning(true);
+        let chunks = ["<|cha", "nnel>thou", "ght\nreasoning<channel|>answer"];
+        let (mut reasoning, mut normal) = (String::new(), String::new());
+        for c in chunks {
+            let r = p.parse_reasoning_streaming_incremental(c, &[]);
+            reasoning.push_str(&r.reasoning_text);
+            normal.push_str(&r.normal_text);
+        }
+        assert_eq!(reasoning, "reasoning");
+        assert_eq!(normal, "answer");
+    }
+
+    #[test]
+    fn seeded_but_completion_opens_channel_itself_non_streaming() {
+        let mut p = Gemma4ReasoningParser::new();
+        p.set_in_reasoning(true);
+        let r = p.detect_and_parse_reasoning("<|channel>thought\nreasoning<channel|>answer", &[]);
+        assert_eq!(r.reasoning_text, "reasoning");
+        assert_eq!(r.normal_text, "answer");
+    }
+
+    #[test]
+    fn prompt_injected_opener_then_tool_call() {
+        let mut p = Gemma4ReasoningParser::new();
+        p.set_in_reasoning(true);
+        let r = p.parse_reasoning_streaming_incremental(
+            "need weather<channel|><|tool_call>call:get_weather{}<tool_call|>",
+            &[],
+        );
+        assert_eq!(r.reasoning_text, "need weather");
+        assert_eq!(r.normal_text, "<|tool_call>call:get_weather{}<tool_call|>");
     }
 
     // ----- Explicit N/A coverage notes (per lib/parsers/TOOLCALLING_CASES.md) -----
