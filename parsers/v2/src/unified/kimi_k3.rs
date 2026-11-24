@@ -10,6 +10,8 @@
 
 use std::collections::HashMap;
 
+use uuid::Uuid;
+
 use serde_json::Value;
 
 use crate::tool_calling::scan::{
@@ -1190,10 +1192,8 @@ impl KimiK3Native {
             return true;
         };
         let name = attr_value(&attrs, "tool").unwrap_or_default().to_string();
-        let index = attr_value(&attrs, "index")
-            .filter(|index| !index.is_empty())
-            .map(str::to_string);
-        let id = tool_call_id(&name, index.as_deref());
+        // XTML indices restart on every response and are not conversation-wide IDs.
+        let id = format!("call-{}", Uuid::new_v4());
         self.active_call = Some(ActiveCall {
             name,
             id,
@@ -2004,19 +2004,6 @@ fn attr_value<'a>(attrs: &'a [(String, String)], key: &str) -> Option<&'a str> {
         .map(|(_, value)| value.as_str())
 }
 
-fn tool_call_id(name: &str, index: Option<&str>) -> String {
-    match index.filter(|index| !index.is_empty()) {
-        None => name.to_string(),
-        Some(index) => index.parse::<i64>().map_or_else(
-            |_| format!("{name}:{index}"),
-            |index| match index.checked_sub(1) {
-                Some(normalized) if index > 0 => format!("{name}:{normalized}"),
-                _ => format!("{name}:{index}"),
-            },
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2185,7 +2172,11 @@ mod tests {
         ];
         assert_native_fragmentations(&input, &expected);
         let (_, ids) = run(&input, UnifiedParserStartingState::None);
-        assert_eq!(ids, ["weather:0", "second:raw"]);
+        assert_eq!(ids.len(), 2);
+        for id in &ids {
+            assert_uuid_id(Some(id));
+        }
+        assert_ne!(ids[0], ids[1]);
     }
 
     #[test]
@@ -2371,49 +2362,106 @@ mod tests {
                     })],
                     "raw JSON {raw:?}, split at byte {split}"
                 );
-                assert_eq!(parser.tool_call_id(0), Some("good:1"));
+                assert_uuid_id(parser.tool_call_id(0));
                 assert_eq!(parser.tool_call_id(1), None);
             }
         }
     }
 
+    fn assert_uuid_id(id: Option<&str>) {
+        let uuid = Uuid::parse_str(id.unwrap().strip_prefix("call-").unwrap()).unwrap();
+        assert_eq!(uuid.get_version_num(), 4);
+    }
+
     #[test]
-    fn tool_call_id_preserves_non_positive_and_overflowing_indices() {
-        let cases = [
-            ("0", "weather:0"),
-            ("-2", "weather:-2"),
-            ("+2", "weather:1"),
-            ("9223372036854775807", "weather:9223372036854775806"),
-            ("-9223372036854775808", "weather:-9223372036854775808"),
-        ];
-        for (index, expected) in cases {
-            assert_eq!(tool_call_id("weather", Some(index)), expected);
+    fn repeated_tool_and_index_get_unique_ids_across_turns() {
+        let input = format!(
+            "{}{}{}",
+            TOOLS_OPEN.canonical,
+            call("Bash", "1", &arg("command", "string", "echo ok")),
+            TOOLS_CLOSE.canonical
+        );
+        let mut parser = kimi_k3_unified(&[]);
+        let mut ids = std::collections::HashSet::new();
+        for _ in 0..2 {
+            parser
+                .initialize_request(UnifiedParserInit::default())
+                .unwrap();
+            let mut events = Vec::new();
+            let mut turn_id = None;
+            for ch in input.chars() {
+                let deltas = parser.push(&ch.to_string()).unwrap();
+                if let Some(id) = parser.tool_call_id(0) {
+                    assert_uuid_id(Some(id));
+                    assert_eq!(turn_id.get_or_insert_with(|| id.to_string()), id);
+                }
+                events.extend(deltas);
+            }
+            events.extend(parser.finish().unwrap().events);
+            assert_eq!(
+                assemble(&events),
+                vec![UnifiedEvent::ToolCall {
+                    name: "Bash".into(),
+                    arguments: serde_json::json!({"command":"echo ok"}),
+                }]
+            );
+            let id = parser.tool_call_id(0).unwrap();
+            assert_eq!(turn_id.as_deref(), Some(id));
+            assert!(ids.insert(id.to_string()), "new turns must get new IDs");
+            parser.reset();
+            assert_eq!(parser.tool_call_id(0), None);
         }
     }
 
     #[test]
-    fn tool_call_id_preserves_non_positive_indices_at_every_split() {
-        for index in ["0", "-2", "-9223372036854775808"] {
+    fn repeated_or_missing_indices_get_unique_ids_at_every_split() {
+        for index in [
+            None,
+            Some(""),
+            Some("1"),
+            Some("raw"),
+            Some("0"),
+            Some("-2"),
+            Some("+2"),
+            Some("9223372036854775807"),
+            Some("-9223372036854775808"),
+        ] {
+            let attrs = index
+                .map(|index| format!(" index=\"{index}\""))
+                .unwrap_or_default();
+            let call = format!(
+                "{OPEN}call tool=\"Bash\"{attrs}{SEP}{}",
+                CALL_CLOSE.canonical
+            );
             let input = format!(
-                "{}{OPEN}call tool=\"weather\" index=\"{index}\"{}{}{}{}",
-                TOOLS_OPEN.canonical,
-                SEP,
-                arg("city", "string", "Paris"),
-                CALL_CLOSE.canonical,
-                TOOLS_CLOSE.canonical,
+                "{}{call}{call}{}",
+                TOOLS_OPEN.canonical, TOOLS_CLOSE.canonical
             );
             for split in input.char_indices().map(|(at, _)| at).chain([input.len()]) {
                 let mut parser = kimi_k3_unified(&[]);
                 parser
                     .initialize_request(UnifiedParserInit::default())
                     .unwrap();
-                parser.push(&input[..split]).unwrap();
-                parser.push(&input[split..]).unwrap();
-                parser.finish().unwrap();
+                let mut events = parser.push(&input[..split]).unwrap();
+                events.extend(parser.push(&input[split..]).unwrap());
+                events.extend(parser.finish().unwrap().events);
                 assert_eq!(
-                    parser.tool_call_id(0),
-                    Some(tool_call_id("weather", Some(index)).as_str())
+                    assemble(&events),
+                    vec![
+                        UnifiedEvent::ToolCall {
+                            name: "Bash".into(),
+                            arguments: serde_json::json!({}),
+                        };
+                        2
+                    ],
+                    "index={index:?}, split={split}"
                 );
+                let first = parser.tool_call_id(0);
+                let second = parser.tool_call_id(1);
+                assert_uuid_id(first);
+                assert_uuid_id(second);
+                assert_ne!(first, second, "index={index:?}, split={split}");
+                assert_eq!(parser.tool_call_id(2), None);
             }
         }
     }
@@ -3012,7 +3060,7 @@ mod tests {
                 complete: true,
             })]
         );
-        assert_eq!(parser.tool_call_id(0), Some("echo:0"));
+        assert_uuid_id(parser.tool_call_id(0));
     }
 
     #[test]
@@ -3254,7 +3302,7 @@ mod tests {
                 })],
                 "split at byte {split}"
             );
-            assert_eq!(parser.tool_call_id(0), Some("good:1"));
+            assert_uuid_id(parser.tool_call_id(0));
             assert_eq!(parser.tool_call_id(1), None);
         }
     }
@@ -3524,6 +3572,6 @@ mod tests {
             panic!("expected a tool call")
         };
         assert_eq!(call.tool_index, 0);
-        assert_eq!(parser.tool_call_id(0), Some("second:0"));
+        assert_uuid_id(parser.tool_call_id(0));
     }
 }
